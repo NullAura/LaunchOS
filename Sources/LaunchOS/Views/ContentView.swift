@@ -147,25 +147,29 @@ private struct HeaderView: View {
     @State private var isSearchHovered = false
 
     var body: some View {
+        let metrics = SearchFieldMetrics.current
+
         HStack {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
+                    .font(.system(size: metrics.iconSize, weight: .medium))
                     .foregroundStyle(.secondary)
 
                 SearchTextField(
                     text: $store.searchText,
                     placeholder: "搜索",
-                    isFocused: searchFocused
+                    isFocused: searchFocused,
+                    fontSize: metrics.fontSize
                 )
-                    .frame(height: 16)
+                    .frame(height: metrics.textFieldHeight)
                     .frame(maxWidth: .infinity)
             }
-            .padding(.horizontal, 11)
-            .padding(.vertical, 8)
-            .frame(width: 280)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .scaleEffect(isSearchHovered ? 1.055 : 1)
-            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .padding(.horizontal, metrics.horizontalPadding)
+            .padding(.vertical, metrics.verticalPadding)
+            .frame(width: metrics.width)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: metrics.cornerRadius, style: .continuous))
+            .scaleEffect(isSearchHovered ? metrics.hoverScale : 1)
+            .contentShape(RoundedRectangle(cornerRadius: metrics.cornerRadius, style: .continuous))
             .onHover { hovering in
                 isSearchHovered = hovering
             }
@@ -179,8 +183,60 @@ private struct HeaderView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 34)
-        .padding(.top, 28)
-        .padding(.bottom, 16)
+        .padding(.top, metrics.topPadding)
+        .padding(.bottom, metrics.bottomPadding)
+    }
+}
+
+private struct SearchFieldMetrics {
+    let screenSize: CGSize
+
+    static var current: SearchFieldMetrics {
+        SearchFieldMetrics(screenSize: NSScreen.main?.frame.size ?? CGSize(width: 1440, height: 900))
+    }
+
+    private var scale: CGFloat {
+        min(max(screenSize.width / 1920, 0.94), 1.18)
+    }
+
+    var width: CGFloat {
+        min(max(screenSize.width * 0.145, 260), 340)
+    }
+
+    var horizontalPadding: CGFloat {
+        11 * scale
+    }
+
+    var verticalPadding: CGFloat {
+        8 * scale
+    }
+
+    var textFieldHeight: CGFloat {
+        16 * scale
+    }
+
+    var fontSize: CGFloat {
+        13 * scale
+    }
+
+    var iconSize: CGFloat {
+        12 * scale
+    }
+
+    var cornerRadius: CGFloat {
+        8 * scale
+    }
+
+    var hoverScale: CGFloat {
+        1 + (0.052 * scale)
+    }
+
+    var topPadding: CGFloat {
+        min(max(screenSize.height * 0.038, 36), 54)
+    }
+
+    var bottomPadding: CGFloat {
+        min(max(screenSize.height * 0.014, 13), 18)
     }
 }
 
@@ -188,6 +244,7 @@ private struct SearchTextField: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
     var isFocused: FocusState<Bool>.Binding
+    let fontSize: CGFloat
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -203,7 +260,7 @@ private struct SearchTextField: NSViewRepresentable {
         textField.drawsBackground = false
         textField.backgroundColor = .clear
         textField.focusRingType = .none
-        textField.font = .systemFont(ofSize: 13)
+        textField.font = .systemFont(ofSize: fontSize)
         textField.lineBreakMode = .byTruncatingTail
         textField.usesSingleLineMode = true
         textField.cell?.sendsActionOnEndEditing = false
@@ -216,6 +273,10 @@ private struct SearchTextField: NSViewRepresentable {
 
         if textField.stringValue != text {
             textField.stringValue = text
+        }
+
+        if textField.font?.pointSize != fontSize {
+            textField.font = .systemFont(ofSize: fontSize)
         }
 
         guard isFocused.wrappedValue,
@@ -267,13 +328,16 @@ private struct PageFooterView: View {
     @State private var hoveredPage: Int?
 
     var body: some View {
+        let metrics = PageFooterMetrics.current
+
         VStack(spacing: 10) {
             if pages.count > 1 {
-                HStack(spacing: 9) {
+                HStack(spacing: metrics.dotSpacing) {
                     ForEach(pages.indices, id: \.self) { index in
                         PageIndicatorDot(
                             isSelected: selectedPage == index,
-                            isHovered: hoveredPage == index
+                            isHovered: hoveredPage == index,
+                            metrics: metrics
                         ) {
                             selectedPage = index
                         }
@@ -287,16 +351,29 @@ private struct PageFooterView: View {
                         .help(pages[index].title)
                     }
                 }
+                .padding(.horizontal, metrics.stripHorizontalPadding)
+                .padding(.vertical, metrics.stripVerticalPadding)
+                .background {
+                    Capsule(style: .continuous)
+                        .fill(.ultraThinMaterial)
+                        .opacity(0.72)
+                }
+                .overlay {
+                    Capsule(style: .continuous)
+                        .stroke(.white.opacity(0.16), lineWidth: metrics.strokeWidth)
+                }
+                .shadow(color: .black.opacity(0.12), radius: metrics.shadowRadius, y: metrics.shadowYOffset)
             }
         }
-        .padding(.horizontal, 24)
-        .padding(.bottom, 24)
+        .padding(.horizontal, metrics.outerHorizontalPadding)
+        .padding(.bottom, metrics.bottomPadding)
     }
 }
 
 private struct PageIndicatorDot: View {
     let isSelected: Bool
     let isHovered: Bool
+    let metrics: PageFooterMetrics
     let action: () -> Void
 
     var body: some View {
@@ -310,7 +387,7 @@ private struct PageIndicatorDot: View {
                     radius: isHovered ? 4 : 0,
                     y: 1
                 )
-                .frame(width: 20, height: 20)
+                .frame(width: metrics.hitSize, height: metrics.hitSize)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -327,7 +404,7 @@ private struct PageIndicatorDot: View {
     }
 
     private var baseSize: CGFloat {
-        isSelected ? 7.5 : 7
+        isSelected ? metrics.selectedDotSize : metrics.dotSize
     }
 
     private var scale: CGFloat {
@@ -336,6 +413,62 @@ private struct PageIndicatorDot: View {
         }
 
         return isSelected ? 1.08 : 1
+    }
+}
+
+private struct PageFooterMetrics {
+    let screenSize: CGSize
+
+    static var current: PageFooterMetrics {
+        PageFooterMetrics(screenSize: NSScreen.main?.frame.size ?? CGSize(width: 1440, height: 900))
+    }
+
+    private var scale: CGFloat {
+        min(max(screenSize.width / 1920, 0.92), 1.18)
+    }
+
+    var dotSize: CGFloat {
+        7 * scale
+    }
+
+    var selectedDotSize: CGFloat {
+        7.5 * scale
+    }
+
+    var hitSize: CGFloat {
+        20 * scale
+    }
+
+    var dotSpacing: CGFloat {
+        9 * scale
+    }
+
+    var stripHorizontalPadding: CGFloat {
+        10 * scale
+    }
+
+    var stripVerticalPadding: CGFloat {
+        3 * scale
+    }
+
+    var strokeWidth: CGFloat {
+        0.7 * scale
+    }
+
+    var shadowRadius: CGFloat {
+        10 * scale
+    }
+
+    var shadowYOffset: CGFloat {
+        4 * scale
+    }
+
+    var outerHorizontalPadding: CGFloat {
+        24 * scale
+    }
+
+    var bottomPadding: CGFloat {
+        min(max(screenSize.height * 0.022, 22), 34)
     }
 }
 
