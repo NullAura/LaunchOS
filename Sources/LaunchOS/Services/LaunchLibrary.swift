@@ -3,13 +3,44 @@ import Foundation
 final class LaunchLibrary {
     private let scanner: ApplicationScanner
     private let importer: LaunchpadLayoutImporter
+    private let cache: LaunchSnapshotCache
 
     init(
         scanner: ApplicationScanner = ApplicationScanner(),
-        importer: LaunchpadLayoutImporter = LaunchpadLayoutImporter()
+        importer: LaunchpadLayoutImporter = LaunchpadLayoutImporter(),
+        cache: LaunchSnapshotCache = LaunchSnapshotCache()
     ) {
         self.scanner = scanner
         self.importer = importer
+        self.cache = cache
+    }
+
+    func loadCachedSnapshot() -> LaunchSnapshot? {
+        cache.load()
+    }
+
+    func saveSnapshotToCache(_ snapshot: LaunchSnapshot) {
+        cache.save(snapshot)
+    }
+
+    func loadLaunchpadSnapshot() -> LaunchSnapshot? {
+        guard let layout = try? importer.importLayoutIfAvailable() else {
+            return nil
+        }
+
+        let materialized = materializeFast(layout: layout)
+        guard !materialized.pages.isEmpty else {
+            return nil
+        }
+
+        return LaunchSnapshot(
+            pages: materialized.pages,
+            totalAppCount: materialized.importedAppCount,
+            importedAppCount: materialized.importedAppCount,
+            launchpadDatabasePath: layout.databasePath,
+            usedLaunchpadLayout: true,
+            generatedAt: Date()
+        )
     }
 
     func loadSnapshot() -> LaunchSnapshot {
@@ -123,6 +154,68 @@ final class LaunchLibrary {
         return (pages, usedApplicationIDs, importedAppCount)
     }
 
+    private func materializeFast(
+        layout: ImportedLaunchpadLayout
+    ) -> (pages: [LaunchPage], importedAppCount: Int) {
+        var importedAppCount = 0
+
+        let importedPages = layout.pages.compactMap { importedPage -> LaunchPage? in
+            let items = importedPage.items.compactMap { item -> LaunchItem? in
+                switch item {
+                case .app(let importedApp):
+                    guard let launchApp = launchApp(importedApp: importedApp) else {
+                        return nil
+                    }
+
+                    importedAppCount += 1
+                    return .app(launchApp)
+
+                case .folder(let importedFolder):
+                    let apps = importedFolder.apps.compactMap { importedApp -> LaunchApp? in
+                        guard let launchApp = launchApp(importedApp: importedApp) else {
+                            return nil
+                        }
+
+                        importedAppCount += 1
+                        return launchApp
+                    }
+
+                    guard !apps.isEmpty else {
+                        return nil
+                    }
+
+                    return .folder(
+                        LaunchFolder(
+                            id: "launchpad-\(importedFolder.id)",
+                            title: importedFolder.title,
+                            apps: apps
+                        )
+                    )
+                }
+            }
+
+            guard !items.isEmpty else {
+                return nil
+            }
+
+            return LaunchPage(
+                id: "launchpad-page-\(importedPage.id)",
+                title: "",
+                items: items
+            )
+        }
+
+        let pages = importedPages.enumerated().map { index, page in
+            LaunchPage(
+                id: page.id,
+                title: "第 \(index + 1) 页",
+                items: page.items
+            )
+        }
+
+        return (pages, importedAppCount)
+    }
+
     private func launchApp(
         importedApp: ImportedLaunchpadApp,
         installedIndex: InstalledApplicationIndex
@@ -132,6 +225,27 @@ final class LaunchLibrary {
             ?? scanner.resolve(bundleIdentifier: importedApp.bundleIdentifier, title: importedApp.title)
 
         guard let installed else {
+            return nil
+        }
+
+        return LaunchApp(installedApplication: installed, preferredTitle: importedApp.title)
+    }
+
+    private func launchApp(importedApp: ImportedLaunchpadApp) -> LaunchApp? {
+        if let url = importedApp.url {
+            return LaunchApp(
+                id: importedApp.bundleIdentifier.lowercased(),
+                title: importedApp.title.nilIfBlank ?? importedApp.bundleIdentifier,
+                bundleIdentifier: importedApp.bundleIdentifier,
+                url: url,
+                source: .workspace
+            )
+        }
+
+        guard let installed = scanner.resolve(
+            bundleIdentifier: importedApp.bundleIdentifier,
+            title: importedApp.title
+        ) else {
             return nil
         }
 

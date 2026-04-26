@@ -42,23 +42,60 @@ final class LauncherStore: ObservableObject {
             return
         }
 
-        reload()
+        hasLoaded = true
+
+        if let cachedSnapshot = library.loadCachedSnapshot() {
+            apply(cachedSnapshot, isRefreshing: false)
+            refreshInBackground()
+            return
+        }
+
+        loadFastThenRefresh()
     }
 
     func reload() {
         hasLoaded = true
-        isLoading = true
+        isLoading = pages.isEmpty
         statusText = "正在扫描应用和旧启动台布局"
+        refreshInBackground()
+    }
+
+    private func loadFastThenRefresh() {
+        isLoading = pages.isEmpty
+        statusText = "正在载入启动台布局"
 
         Task {
-            let snapshot = await Task.detached(priority: .userInitiated) {
-                LaunchLibrary().loadSnapshot()
+            let fastSnapshot = await Task.detached(priority: .userInitiated) {
+                let library = LaunchLibrary()
+                return library.loadLaunchpadSnapshot()
             }.value
 
-            pages = snapshot.pages
-            isLoading = false
-            statusText = Self.statusText(for: snapshot)
+            if let fastSnapshot {
+                apply(fastSnapshot, isRefreshing: false)
+                refreshInBackground()
+            } else {
+                refreshInBackground()
+            }
         }
+    }
+
+    private func refreshInBackground() {
+        Task {
+            let snapshot = await Task.detached(priority: .utility) {
+                let library = LaunchLibrary()
+                let snapshot = library.loadSnapshot()
+                library.saveSnapshotToCache(snapshot)
+                return snapshot
+            }.value
+
+            apply(snapshot, isRefreshing: false)
+        }
+    }
+
+    private func apply(_ snapshot: LaunchSnapshot, isRefreshing: Bool) {
+        pages = snapshot.pages
+        isLoading = isRefreshing
+        statusText = Self.statusText(for: snapshot)
     }
 
     func launch(_ app: LaunchApp) {

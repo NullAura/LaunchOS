@@ -15,7 +15,7 @@ struct InstalledApplication: Identifiable, Hashable, Sendable {
     }
 }
 
-enum ApplicationSource: String, Sendable {
+enum ApplicationSource: String, Codable, Sendable {
     case applications = "Applications"
     case systemApplications = "System"
     case userApplications = "User"
@@ -28,6 +28,14 @@ struct LaunchApp: Identifiable, Hashable, Sendable {
     let bundleIdentifier: String?
     let url: URL
     let source: ApplicationSource
+
+    init(id: String, title: String, bundleIdentifier: String?, url: URL, source: ApplicationSource) {
+        self.id = id
+        self.title = title
+        self.bundleIdentifier = bundleIdentifier
+        self.url = url
+        self.source = source
+    }
 
     init(installedApplication: InstalledApplication, preferredTitle: String? = nil) {
         self.id = installedApplication.id
@@ -93,6 +101,7 @@ struct ImportedLaunchpadApp: Identifiable, Sendable {
     let id: Int
     let title: String
     let bundleIdentifier: String
+    let url: URL?
 }
 
 struct ImportedLaunchpadFolder: Identifiable, Sendable {

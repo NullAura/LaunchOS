@@ -135,7 +135,7 @@ final class LaunchpadLayoutImporter {
         try rows(
             database: database,
             sql: """
-                SELECT i.rowid, i.type, COALESCE(a.title, ''), COALESCE(a.bundleid, ''), COALESCE(g.title, '')
+                SELECT i.rowid, i.type, COALESCE(a.title, ''), COALESCE(a.bundleid, ''), COALESCE(g.title, ''), a.bookmark
                 FROM items i
                 LEFT JOIN apps a ON a.item_id = i.rowid
                 LEFT JOIN groups g ON g.item_id = i.rowid
@@ -149,6 +149,7 @@ final class LaunchpadLayoutImporter {
             let title = text(statement: statement, column: 2)
             let bundleID = text(statement: statement, column: 3)
             let folderTitle = text(statement: statement, column: 4)
+            let bookmarkURL = bookmarkURL(statement: statement, column: 5)
 
             if type == 2 {
                 guard !visitedFolders.contains(rowID) else {
@@ -182,7 +183,8 @@ final class LaunchpadLayoutImporter {
                 ImportedLaunchpadApp(
                     id: rowID,
                     title: title.nilIfBlank ?? cleanBundleID,
-                    bundleIdentifier: cleanBundleID
+                    bundleIdentifier: cleanBundleID,
+                    url: bookmarkURL
                 )
             )
         }
@@ -262,5 +264,26 @@ final class LaunchpadLayoutImporter {
         }
 
         return String(cString: pointer)
+    }
+
+    private func bookmarkURL(statement: OpaquePointer, column: Int32) -> URL? {
+        guard sqlite3_column_type(statement, column) == SQLITE_BLOB,
+              let bytes = sqlite3_column_blob(statement, column) else {
+            return nil
+        }
+
+        let length = Int(sqlite3_column_bytes(statement, column))
+        guard length > 0 else {
+            return nil
+        }
+
+        let data = Data(bytes: bytes, count: length)
+        var isStale = false
+        return try? URL(
+            resolvingBookmarkData: data,
+            options: [.withoutUI, .withoutMounting],
+            relativeTo: nil,
+            bookmarkDataIsStale: &isStale
+        )
     }
 }
