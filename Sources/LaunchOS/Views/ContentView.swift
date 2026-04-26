@@ -28,6 +28,7 @@ struct ContentView: View {
                         PagedLauncherView(
                             pages: store.pages,
                             selectedPage: $selectedPage,
+                            isPagingEnabled: store.activeFolder == nil,
                             launchingAppID: store.launchingAppID,
                             launch: store.launch,
                             reveal: store.revealInFinder,

@@ -6,7 +6,7 @@ import SwiftUI
 @MainActor
 final class LauncherStore: ObservableObject {
     @Published private(set) var pages: [LaunchPage] = []
-    @Published private(set) var isLoading = false
+    @Published private(set) var isLoading = true
     @Published private(set) var statusText = "正在准备应用列表"
     @Published private(set) var launchingAppID: String?
     @Published private(set) var isClosing = false

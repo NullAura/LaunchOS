@@ -1,8 +1,10 @@
+import AppKit
 import SwiftUI
 
 struct PagedLauncherView: View {
     let pages: [LaunchPage]
     @Binding var selectedPage: Int
+    let isPagingEnabled: Bool
     let launchingAppID: String?
     let launch: (LaunchApp) -> Void
     let reveal: (LaunchApp) -> Void
@@ -31,9 +33,7 @@ struct PagedLauncherView: View {
                 .animation(.interactiveSpring(response: 0.34, dampingFraction: 0.88, blendDuration: 0.12), value: selectedPage)
 
                 PageStepButton(systemName: "chevron.left") {
-                    withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.88, blendDuration: 0.12)) {
-                        selectedPage = max(selectedPage - 1, 0)
-                    }
+                    moveToPage(max(selectedPage - 1, 0))
                 }
                 .disabled(selectedPage == 0)
                 .opacity(selectedPage == 0 ? 0 : 1)
@@ -41,9 +41,7 @@ struct PagedLauncherView: View {
                 .padding(.leading, 22)
 
                 PageStepButton(systemName: "chevron.right") {
-                    withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.88, blendDuration: 0.12)) {
-                        selectedPage = min(selectedPage + 1, pages.count - 1)
-                    }
+                    moveToPage(min(selectedPage + 1, pages.count - 1))
                 }
                 .disabled(selectedPage >= pages.count - 1)
                 .opacity(selectedPage >= pages.count - 1 ? 0 : 1)
@@ -51,9 +49,13 @@ struct PagedLauncherView: View {
                 .padding(.trailing, 22)
             }
             .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 18)
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 6)
                     .onChanged { value in
+                        guard isPagingEnabled else {
+                            return
+                        }
+
                         dragOffset = resistedTranslation(
                             value.translation.width,
                             selectedPage: selectedPage,
@@ -61,6 +63,11 @@ struct PagedLauncherView: View {
                         )
                     }
                     .onEnded { value in
+                        guard isPagingEnabled else {
+                            dragOffset = 0
+                            return
+                        }
+
                         let threshold = pageWidth * 0.16
                         let projectedTranslation = value.predictedEndTranslation.width
                         var nextPage = selectedPage
@@ -71,12 +78,25 @@ struct PagedLauncherView: View {
                             nextPage = max(selectedPage - 1, 0)
                         }
 
-                        withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.88, blendDuration: 0.12)) {
-                            selectedPage = nextPage
-                            dragOffset = 0
-                        }
+                        moveToPage(nextPage)
                     }
             )
+            .background(
+                PageScrollBridge(
+                    isEnabled: isPagingEnabled,
+                    canMovePrevious: selectedPage > 0,
+                    canMoveNext: selectedPage < pages.count - 1,
+                    movePrevious: { moveToPage(max(selectedPage - 1, 0)) },
+                    moveNext: { moveToPage(min(selectedPage + 1, pages.count - 1)) }
+                )
+            )
+        }
+    }
+
+    private func moveToPage(_ page: Int) {
+        withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.88, blendDuration: 0.12)) {
+            selectedPage = page
+            dragOffset = 0
         }
     }
 
@@ -125,7 +145,7 @@ struct FolderOverlayView: View {
     var body: some View {
         GeometryReader { geometry in
             let width = min(720, max(500, geometry.size.width * 0.36))
-            let height = min(560, max(390, geometry.size.height * 0.44))
+            let height = min(720, max(520, geometry.size.height * 0.58))
 
             ZStack {
                 Color.black.opacity(0.22)
@@ -143,6 +163,7 @@ struct FolderOverlayView: View {
                     LaunchAppGrid(
                         apps: folder.apps,
                         spacingScale: 0.92,
+                        mode: .folder,
                         launchingAppID: launchingAppID,
                         launch: launch,
                         reveal: reveal
@@ -233,13 +254,14 @@ private struct LaunchItemGrid: View {
 private struct LaunchAppGrid: View {
     let apps: [LaunchApp]
     let spacingScale: CGFloat
+    var mode: GridMetrics.Mode = .list
     let launchingAppID: String?
     let launch: (LaunchApp) -> Void
     let reveal: (LaunchApp) -> Void
 
     var body: some View {
         GeometryReader { geometry in
-            let metrics = GridMetrics(size: geometry.size, itemCount: apps.count, spacingScale: spacingScale)
+            let metrics = GridMetrics(size: geometry.size, itemCount: apps.count, spacingScale: spacingScale, mode: mode)
 
             ScrollView {
                 LazyVGrid(columns: metrics.columns, spacing: metrics.rowSpacing) {
@@ -415,10 +437,28 @@ private struct GridMetrics {
     let gridHeight: CGFloat
     let targetRowCount: Int
 
-    init(size: CGSize, itemCount: Int, spacingScale: CGFloat = 1) {
+    enum Mode {
+        case page
+        case list
+        case folder
+    }
+
+    init(size: CGSize, itemCount: Int, spacingScale: CGFloat = 1, mode: Mode = .page) {
         let widthBasedColumns = max(3, min(7, Int(size.width / 126)))
-        let columnCount = size.width >= 900 ? 7 : widthBasedColumns
-        let targetRows = size.height >= 700 ? 5 : 4
+        let columnCount: Int
+        let targetRows: Int
+
+        switch mode {
+        case .page:
+            columnCount = size.width >= 900 ? 7 : widthBasedColumns
+            targetRows = size.height >= 700 ? 5 : 4
+        case .list:
+            columnCount = min(widthBasedColumns, max(itemCount, 1))
+            targetRows = max(1, Int(ceil(Double(max(itemCount, 1)) / Double(max(columnCount, 1)))))
+        case .folder:
+            columnCount = min(4, max(2, min(widthBasedColumns, max(itemCount, 1))))
+            targetRows = max(1, Int(ceil(Double(max(itemCount, 1)) / Double(max(columnCount, 1)))))
+        }
 
         let targetWidthFraction: CGFloat
         if size.width >= 3000 {
@@ -454,7 +494,7 @@ private struct GridMetrics {
         let iconSizeFromHeight = size.height * targetHeightFraction / heightCoefficient
         let shortSide = min(size.width, size.height)
         let proportionalMinimum = shortSide * 0.052
-        let proportionalMaximum = shortSide * 0.105
+        let proportionalMaximum = shortSide * (mode == .folder ? 0.18 : 0.105)
         let resolvedIconSize = min(max(min(iconSizeFromWidth, iconSizeFromHeight), proportionalMinimum), proportionalMaximum)
 
         self.iconSize = resolvedIconSize
@@ -471,5 +511,89 @@ private struct GridMetrics {
         self.targetRowCount = targetRows
         self.horizontalPadding = max(24, (size.width - gridWidth) / 2)
         self.columns = Array(repeating: GridItem(.fixed(tileWidth), spacing: columnSpacing), count: columnCount)
+    }
+}
+
+private struct PageScrollBridge: NSViewRepresentable {
+    let isEnabled: Bool
+    let canMovePrevious: Bool
+    let canMoveNext: Bool
+    let movePrevious: () -> Void
+    let moveNext: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        context.coordinator.installMonitor()
+        return NSView(frame: .zero)
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.isEnabled = isEnabled
+        context.coordinator.canMovePrevious = canMovePrevious
+        context.coordinator.canMoveNext = canMoveNext
+        context.coordinator.movePrevious = movePrevious
+        context.coordinator.moveNext = moveNext
+    }
+
+    final class Coordinator {
+        var isEnabled = false
+        var canMovePrevious = false
+        var canMoveNext = false
+        var movePrevious: () -> Void = {}
+        var moveNext: () -> Void = {}
+
+        private var monitor: Any?
+        private var accumulatedDeltaX: CGFloat = 0
+        private var lastMoveDate = Date.distantPast
+
+        deinit {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+            }
+        }
+
+        func installMonitor() {
+            guard monitor == nil else {
+                return
+            }
+
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                self?.handle(event) ?? event
+            }
+        }
+
+        private func handle(_ event: NSEvent) -> NSEvent? {
+            guard isEnabled else {
+                return event
+            }
+
+            let horizontal = event.scrollingDeltaX
+            let vertical = event.scrollingDeltaY
+            guard abs(horizontal) > max(1.5, abs(vertical) * 1.35) else {
+                return event
+            }
+
+            accumulatedDeltaX += horizontal
+
+            let threshold: CGFloat = event.hasPreciseScrollingDeltas ? 18 : 3
+            guard abs(accumulatedDeltaX) >= threshold,
+                  Date().timeIntervalSince(lastMoveDate) > 0.28 else {
+                return nil
+            }
+
+            if accumulatedDeltaX > 0, canMoveNext {
+                moveNext()
+                lastMoveDate = Date()
+            } else if accumulatedDeltaX < 0, canMovePrevious {
+                movePrevious()
+                lastMoveDate = Date()
+            }
+
+            accumulatedDeltaX = 0
+            return nil
+        }
     }
 }

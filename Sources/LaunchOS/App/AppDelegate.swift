@@ -3,12 +3,17 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var escapeMonitor: Any?
     private var originalPresentationOptions: NSApplication.PresentationOptions = []
+    private var ignoreResignUntil: Date?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         originalPresentationOptions = NSApp.presentationOptions
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         installEscapeMonitor()
+
+        if DockPersistenceInstaller.installIfNeeded() {
+            ignoreResignUntil = Date().addingTimeInterval(3)
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -20,6 +25,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidResignActive(_ notification: Notification) {
+        if let ignoreResignUntil, Date() < ignoreResignUntil {
+            return
+        }
+
         NotificationCenter.default.post(name: .launchOSExitRequested, object: nil)
     }
 
