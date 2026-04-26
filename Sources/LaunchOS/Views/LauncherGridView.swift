@@ -48,49 +48,53 @@ struct PagedLauncherView: View {
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(.trailing, 22)
             }
+            .frame(width: geometry.size.width, height: geometry.size.height)
             .contentShape(Rectangle())
-            .highPriorityGesture(
-                DragGesture(minimumDistance: 6)
-                    .onChanged { value in
+            .background(
+                PageInputBridge(
+                    isEnabled: isPagingEnabled,
+                    pageWidth: pageWidth,
+                    selectedPage: selectedPage,
+                    canMovePrevious: selectedPage > 0,
+                    canMoveNext: selectedPage < pages.count - 1,
+                    dragChanged: { translation in
                         guard isPagingEnabled else {
                             return
                         }
 
                         dragOffset = resistedTranslation(
-                            value.translation.width,
+                            translation,
                             selectedPage: selectedPage,
                             pageCount: pages.count
                         )
-                    }
-                    .onEnded { value in
+                    },
+                    dragEnded: { translation, velocity in
                         guard isPagingEnabled else {
                             dragOffset = 0
                             return
                         }
 
-                        let threshold = pageWidth * 0.16
-                        let projectedTranslation = value.predictedEndTranslation.width
-                        var nextPage = selectedPage
-
-                        if projectedTranslation < -threshold {
-                            nextPage = min(selectedPage + 1, pages.count - 1)
-                        } else if projectedTranslation > threshold {
-                            nextPage = max(selectedPage - 1, 0)
-                        }
-
-                        moveToPage(nextPage)
-                    }
-            )
-            .background(
-                PageScrollBridge(
-                    isEnabled: isPagingEnabled,
-                    canMovePrevious: selectedPage > 0,
-                    canMoveNext: selectedPage < pages.count - 1,
+                        finishDrag(translation: translation, velocity: velocity, pageWidth: pageWidth)
+                    },
                     movePrevious: { moveToPage(max(selectedPage - 1, 0)) },
                     moveNext: { moveToPage(min(selectedPage + 1, pages.count - 1)) }
                 )
             )
         }
+    }
+
+    private func finishDrag(translation: CGFloat, velocity: CGFloat, pageWidth: CGFloat) {
+        let distanceThreshold = pageWidth * 0.14
+        let velocityThreshold: CGFloat = 720
+        var nextPage = selectedPage
+
+        if translation < -distanceThreshold || velocity < -velocityThreshold {
+            nextPage = min(selectedPage + 1, pages.count - 1)
+        } else if translation > distanceThreshold || velocity > velocityThreshold {
+            nextPage = max(selectedPage - 1, 0)
+        }
+
+        moveToPage(nextPage)
     }
 
     private func moveToPage(_ page: Int) {
@@ -514,10 +518,15 @@ private struct GridMetrics {
     }
 }
 
-private struct PageScrollBridge: NSViewRepresentable {
+// SwiftUI drag gestures can miss transparent space after page offsets; keep paging input scoped to the full page view.
+private struct PageInputBridge: NSViewRepresentable {
     let isEnabled: Bool
+    let pageWidth: CGFloat
+    let selectedPage: Int
     let canMovePrevious: Bool
     let canMoveNext: Bool
+    let dragChanged: (CGFloat) -> Void
+    let dragEnded: (CGFloat, CGFloat) -> Void
     let movePrevious: () -> Void
     let moveNext: () -> Void
 
@@ -526,74 +535,231 @@ private struct PageScrollBridge: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSView {
-        context.coordinator.installMonitor()
-        return NSView(frame: .zero)
+        let view = NSView(frame: .zero)
+        context.coordinator.installMonitor(attachedTo: view)
+        return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
         context.coordinator.isEnabled = isEnabled
+        context.coordinator.pageWidth = pageWidth
         context.coordinator.canMovePrevious = canMovePrevious
         context.coordinator.canMoveNext = canMoveNext
+        context.coordinator.dragChanged = dragChanged
+        context.coordinator.dragEnded = dragEnded
         context.coordinator.movePrevious = movePrevious
         context.coordinator.moveNext = moveNext
+        context.coordinator.updateSelectedPage(selectedPage)
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.removeMonitor()
     }
 
     final class Coordinator {
         var isEnabled = false
+        var pageWidth: CGFloat = 1
         var canMovePrevious = false
         var canMoveNext = false
+        var dragChanged: (CGFloat) -> Void = { _ in }
+        var dragEnded: (CGFloat, CGFloat) -> Void = { _, _ in }
         var movePrevious: () -> Void = {}
         var moveNext: () -> Void = {}
 
+        private weak var view: NSView?
         private var monitor: Any?
-        private var accumulatedDeltaX: CGFloat = 0
-        private var lastMoveDate = Date.distantPast
+        private var selectedPage = 0
+        private var accumulatedScrollDeltaX: CGFloat = 0
+        private var lastScrollMoveDate = Date.distantPast
+        private var isTrackingDrag = false
+        private var didBeginPagingDrag = false
+        private var accumulatedDragX: CGFloat = 0
+        private var accumulatedDragY: CGFloat = 0
+        private var dragStartDate = Date.distantPast
 
         deinit {
-            if let monitor {
-                NSEvent.removeMonitor(monitor)
-            }
+            removeMonitor()
         }
 
-        func installMonitor() {
+        func installMonitor(attachedTo view: NSView) {
+            self.view = view
             guard monitor == nil else {
                 return
             }
 
-            monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            let mask: NSEvent.EventTypeMask = [.scrollWheel, .leftMouseDown, .leftMouseDragged, .leftMouseUp]
+            monitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
                 self?.handle(event) ?? event
             }
         }
 
+        func removeMonitor() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+        }
+
+        func updateSelectedPage(_ page: Int) {
+            guard selectedPage != page else {
+                return
+            }
+
+            selectedPage = page
+            resetScrollState()
+            resetDragState()
+        }
+
         private func handle(_ event: NSEvent) -> NSEvent? {
             guard isEnabled else {
+                resetScrollState()
+                cancelDrag()
                 return event
+            }
+
+            switch event.type {
+            case .scrollWheel:
+                return handleScroll(event)
+            case .leftMouseDown:
+                return handleMouseDown(event)
+            case .leftMouseDragged:
+                return handleMouseDragged(event)
+            case .leftMouseUp:
+                return handleMouseUp(event)
+            default:
+                return event
+            }
+        }
+
+        private func handleScroll(_ event: NSEvent) -> NSEvent? {
+            guard isEventInsideBridge(event) else {
+                return event
+            }
+
+            let shouldResetAtEnd = event.phase == .ended
+                || event.phase == .cancelled
+                || event.momentumPhase == .ended
+                || event.momentumPhase == .cancelled
+            defer {
+                if shouldResetAtEnd {
+                    resetScrollState()
+                }
+            }
+
+            if event.phase == .began || event.momentumPhase == .began {
+                resetScrollState()
             }
 
             let horizontal = event.scrollingDeltaX
             let vertical = event.scrollingDeltaY
-            guard abs(horizontal) > max(1.5, abs(vertical) * 1.35) else {
+            guard abs(horizontal) > max(1.2, abs(vertical) * 1.2) else {
                 return event
             }
 
-            accumulatedDeltaX += horizontal
+            accumulatedScrollDeltaX += horizontal
 
-            let threshold: CGFloat = event.hasPreciseScrollingDeltas ? 18 : 3
-            guard abs(accumulatedDeltaX) >= threshold,
-                  Date().timeIntervalSince(lastMoveDate) > 0.28 else {
+            let threshold: CGFloat = event.hasPreciseScrollingDeltas ? min(18, max(8, pageWidth * 0.004)) : 2
+            let now = Date()
+            guard abs(accumulatedScrollDeltaX) >= threshold,
+                  now.timeIntervalSince(lastScrollMoveDate) > 0.22 else {
                 return nil
             }
 
-            if accumulatedDeltaX > 0, canMoveNext {
+            if accumulatedScrollDeltaX > 0, canMoveNext {
                 moveNext()
-                lastMoveDate = Date()
-            } else if accumulatedDeltaX < 0, canMovePrevious {
+                lastScrollMoveDate = now
+            } else if accumulatedScrollDeltaX < 0, canMovePrevious {
                 movePrevious()
-                lastMoveDate = Date()
+                lastScrollMoveDate = now
             }
 
-            accumulatedDeltaX = 0
+            accumulatedScrollDeltaX = 0
             return nil
+        }
+
+        private func handleMouseDown(_ event: NSEvent) -> NSEvent? {
+            guard isEventInsideBridge(event) else {
+                cancelDrag()
+                return event
+            }
+
+            isTrackingDrag = true
+            didBeginPagingDrag = false
+            accumulatedDragX = 0
+            accumulatedDragY = 0
+            dragStartDate = Date()
+            return event
+        }
+
+        private func handleMouseDragged(_ event: NSEvent) -> NSEvent? {
+            if !isTrackingDrag {
+                guard isEventInsideBridge(event) else {
+                    return event
+                }
+
+                isTrackingDrag = true
+                dragStartDate = Date()
+            }
+
+            accumulatedDragX += event.deltaX
+            accumulatedDragY += event.deltaY
+
+            if didBeginPagingDrag || abs(accumulatedDragX) > max(4, abs(accumulatedDragY) * 1.15) {
+                didBeginPagingDrag = true
+                dragChanged(accumulatedDragX)
+                return nil
+            }
+
+            return event
+        }
+
+        private func handleMouseUp(_ event: NSEvent) -> NSEvent? {
+            guard isTrackingDrag else {
+                return event
+            }
+
+            let shouldConsume = didBeginPagingDrag
+            let elapsed = max(Date().timeIntervalSince(dragStartDate), 0.001)
+            let velocity = accumulatedDragX / CGFloat(elapsed)
+            let translation = accumulatedDragX
+
+            if didBeginPagingDrag {
+                dragEnded(translation, velocity)
+            }
+
+            resetDragState()
+            return shouldConsume ? nil : event
+        }
+
+        private func isEventInsideBridge(_ event: NSEvent) -> Bool {
+            guard let view,
+                  let window = view.window,
+                  event.window === window else {
+                return false
+            }
+
+            let point = view.convert(event.locationInWindow, from: nil)
+            return view.bounds.contains(point)
+        }
+
+        private func resetScrollState() {
+            accumulatedScrollDeltaX = 0
+        }
+
+        private func cancelDrag() {
+            if didBeginPagingDrag {
+                dragChanged(0)
+            }
+
+            resetDragState()
+        }
+
+        private func resetDragState() {
+            isTrackingDrag = false
+            didBeginPagingDrag = false
+            accumulatedDragX = 0
+            accumulatedDragY = 0
+            dragStartDate = .distantPast
         }
     }
 }
