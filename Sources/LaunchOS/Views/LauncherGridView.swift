@@ -18,7 +18,7 @@ struct PagedLauncherView: View {
     var body: some View {
         GeometryReader { geometry in
             let pageWidth = max(geometry.size.width, 1)
-            let excludedDragRects = currentPageItemRects(in: geometry.size)
+            let itemDragTargets = currentPageItemDragTargets(in: geometry.size)
 
             ZStack {
                 HStack(spacing: 0) {
@@ -65,7 +65,7 @@ struct PagedLauncherView: View {
                     selectedPage: selectedPage,
                     canMovePrevious: selectedPage > 0,
                     canMoveNext: selectedPage < pages.count - 1,
-                    excludedDragRects: excludedDragRects,
+                    itemDragTargets: itemDragTargets,
                     dragChanged: { translation in
                         guard isPagingEnabled else {
                             return
@@ -85,6 +85,9 @@ struct PagedLauncherView: View {
 
                         finishDrag(translation: translation, velocity: velocity, pageWidth: pageWidth)
                     },
+                    beginItemDrag: beginDragging,
+                    dropOnPageItem: dropOnPageItem,
+                    dropOnPagePosition: dropOnPagePosition,
                     movePrevious: { moveToPage(max(selectedPage - 1, 0)) },
                     moveNext: { moveToPage(min(selectedPage + 1, pages.count - 1)) }
                 )
@@ -125,7 +128,7 @@ struct PagedLauncherView: View {
         return translation
     }
 
-    private func currentPageItemRects(in size: CGSize) -> [CGRect] {
+    private func currentPageItemDragTargets(in size: CGSize) -> [PageItemDragTarget] {
         guard pages.indices.contains(selectedPage) else {
             return []
         }
@@ -138,14 +141,26 @@ struct PagedLauncherView: View {
         return page.items.indices.map { index in
             let row = index / metrics.columnCount
             let column = index % metrics.columnCount
-            return CGRect(
-                x: originX + CGFloat(column) * (metrics.tileWidth + metrics.columnSpacing),
-                y: originY + CGFloat(row) * (metrics.tileHeight + metrics.rowSpacing),
-                width: metrics.tileWidth,
-                height: metrics.tileHeight
+            return PageItemDragTarget(
+                pageID: page.id,
+                item: page.items[index],
+                index: index,
+                rect: CGRect(
+                    x: originX + CGFloat(column) * (metrics.tileWidth + metrics.columnSpacing),
+                    y: originY + CGFloat(row) * (metrics.tileHeight + metrics.rowSpacing),
+                    width: metrics.tileWidth,
+                    height: metrics.tileHeight
+                )
             )
         }
     }
+}
+
+private struct PageItemDragTarget: Equatable {
+    let pageID: String
+    let item: LaunchItem
+    let index: Int
+    let rect: CGRect
 }
 
 struct SearchResultsView: View {
@@ -786,9 +801,12 @@ private struct PageInputBridge: NSViewRepresentable {
     let selectedPage: Int
     let canMovePrevious: Bool
     let canMoveNext: Bool
-    let excludedDragRects: [CGRect]
+    let itemDragTargets: [PageItemDragTarget]
     let dragChanged: (CGFloat) -> Void
     let dragEnded: (CGFloat, CGFloat) -> Void
+    let beginItemDrag: (LaunchItem, String) -> Void
+    let dropOnPageItem: (String, String, LaunchDropPlacement) -> Void
+    let dropOnPagePosition: (String, Int) -> Void
     let movePrevious: () -> Void
     let moveNext: () -> Void
 
@@ -807,9 +825,12 @@ private struct PageInputBridge: NSViewRepresentable {
         context.coordinator.pageWidth = pageWidth
         context.coordinator.canMovePrevious = canMovePrevious
         context.coordinator.canMoveNext = canMoveNext
-        context.coordinator.excludedDragRects = excludedDragRects
+        context.coordinator.itemDragTargets = itemDragTargets
         context.coordinator.dragChanged = dragChanged
         context.coordinator.dragEnded = dragEnded
+        context.coordinator.beginItemDrag = beginItemDrag
+        context.coordinator.dropOnPageItem = dropOnPageItem
+        context.coordinator.dropOnPagePosition = dropOnPagePosition
         context.coordinator.movePrevious = movePrevious
         context.coordinator.moveNext = moveNext
         context.coordinator.updateSelectedPage(selectedPage)
@@ -824,9 +845,12 @@ private struct PageInputBridge: NSViewRepresentable {
         var pageWidth: CGFloat = 1
         var canMovePrevious = false
         var canMoveNext = false
-        var excludedDragRects: [CGRect] = []
+        var itemDragTargets: [PageItemDragTarget] = []
         var dragChanged: (CGFloat) -> Void = { _ in }
         var dragEnded: (CGFloat, CGFloat) -> Void = { _, _ in }
+        var beginItemDrag: (LaunchItem, String) -> Void = { _, _ in }
+        var dropOnPageItem: (String, String, LaunchDropPlacement) -> Void = { _, _, _ in }
+        var dropOnPagePosition: (String, Int) -> Void = { _, _ in }
         var movePrevious: () -> Void = {}
         var moveNext: () -> Void = {}
 
@@ -835,8 +859,9 @@ private struct PageInputBridge: NSViewRepresentable {
         private var selectedPage = 0
         private var accumulatedScrollDeltaX: CGFloat = 0
         private var lastScrollMoveDate = Date.distantPast
+        private var trackedItemDragTarget: PageItemDragTarget?
         private var isTrackingDrag = false
-        private var isIgnoringDrag = false
+        private var didBeginItemDrag = false
         private var didBeginPagingDrag = false
         private var accumulatedDragX: CGFloat = 0
         private var accumulatedDragY: CGFloat = 0
@@ -948,15 +973,20 @@ private struct PageInputBridge: NSViewRepresentable {
                 return event
             }
 
-            if isEventInsideExcludedDragRect(event) {
-                isIgnoringDrag = true
+            if let target = itemDragTarget(for: event) {
+                trackedItemDragTarget = target
                 isTrackingDrag = false
+                didBeginItemDrag = false
                 didBeginPagingDrag = false
+                accumulatedDragX = 0
+                accumulatedDragY = 0
+                dragStartDate = Date()
                 return event
             }
 
             isTrackingDrag = true
-            isIgnoringDrag = false
+            trackedItemDragTarget = nil
+            didBeginItemDrag = false
             didBeginPagingDrag = false
             accumulatedDragX = 0
             accumulatedDragY = 0
@@ -965,7 +995,19 @@ private struct PageInputBridge: NSViewRepresentable {
         }
 
         private func handleMouseDragged(_ event: NSEvent) -> NSEvent? {
-            if isIgnoringDrag {
+            if trackedItemDragTarget != nil {
+                accumulatedDragX += event.deltaX
+                accumulatedDragY += event.deltaY
+
+                if didBeginItemDrag || hypot(accumulatedDragX, accumulatedDragY) > 5 {
+                    if !didBeginItemDrag, let target = trackedItemDragTarget {
+                        beginItemDrag(target.item, target.pageID)
+                    }
+
+                    didBeginItemDrag = true
+                    return nil
+                }
+
                 return event
             }
 
@@ -991,9 +1033,15 @@ private struct PageInputBridge: NSViewRepresentable {
         }
 
         private func handleMouseUp(_ event: NSEvent) -> NSEvent? {
-            if isIgnoringDrag {
+            if let sourceTarget = trackedItemDragTarget {
+                let shouldConsume = didBeginItemDrag
+
+                if didBeginItemDrag {
+                    performItemDrop(from: sourceTarget, event: event)
+                }
+
                 resetDragState()
-                return event
+                return shouldConsume ? nil : event
             }
 
             guard isTrackingDrag else {
@@ -1024,15 +1072,39 @@ private struct PageInputBridge: NSViewRepresentable {
             return view.bounds.contains(point)
         }
 
-        private func isEventInsideExcludedDragRect(_ event: NSEvent) -> Bool {
+        private func itemDragTarget(for event: NSEvent) -> PageItemDragTarget? {
             guard let view,
                   let window = view.window,
                   event.window === window else {
-                return false
+                return nil
             }
 
             let point = view.convert(event.locationInWindow, from: nil)
-            return excludedDragRects.contains { $0.contains(point) }
+            return itemDragTargets.first { $0.rect.contains(point) }
+        }
+
+        private func performItemDrop(from sourceTarget: PageItemDragTarget, event: NSEvent) {
+            guard let view,
+                  let window = view.window,
+                  event.window === window else {
+                return
+            }
+
+            let point = view.convert(event.locationInWindow, from: nil)
+            if let destination = itemDragTargets.first(where: { $0.rect.contains(point) }),
+               destination.item.id != sourceTarget.item.id {
+                let localPoint = CGPoint(
+                    x: point.x - destination.rect.minX,
+                    y: point.y - destination.rect.minY
+                )
+                dropOnPageItem(
+                    destination.item.id,
+                    destination.pageID,
+                    placement(for: localPoint, tileSize: destination.rect.size)
+                )
+            } else {
+                dropOnPagePosition(sourceTarget.pageID, Int.max)
+            }
         }
 
         private func resetScrollState() {
@@ -1049,7 +1121,8 @@ private struct PageInputBridge: NSViewRepresentable {
 
         private func resetDragState() {
             isTrackingDrag = false
-            isIgnoringDrag = false
+            trackedItemDragTarget = nil
+            didBeginItemDrag = false
             didBeginPagingDrag = false
             accumulatedDragX = 0
             accumulatedDragY = 0
