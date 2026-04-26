@@ -367,15 +367,32 @@ private struct GridMetrics {
     init(size: CGSize, itemCount: Int, spacingScale: CGFloat = 1) {
         let baseTileWidth: CGFloat = 112
         let baseIconSize: CGFloat = 76
-        let baseColumnSpacing: CGFloat = 34
-        let baseRowSpacing: CGFloat = 31
+        let baseColumnSpacing: CGFloat = 58
+        let baseRowSpacing: CGFloat = 46
         let baseTileLabelHeight: CGFloat = 48
         let widthBasedColumns = max(3, min(7, Int(size.width / 126)))
         let columnCount = size.width >= 900 ? 7 : widthBasedColumns
         let targetRows = size.height >= 700 ? 5 : 4
 
-        let targetWidthFraction: CGFloat = size.width >= 1000 ? 0.68 : 0.86
-        let targetHeightFraction: CGFloat = size.height >= 1000 ? 0.74 : 0.78
+        let targetWidthFraction: CGFloat
+        if size.width >= 3000 {
+            targetWidthFraction = 0.80
+        } else if size.width >= 1800 {
+            targetWidthFraction = 0.76
+        } else if size.width >= 1000 {
+            targetWidthFraction = 0.72
+        } else {
+            targetWidthFraction = 0.86
+        }
+
+        let targetHeightFraction: CGFloat
+        if size.height >= 1800 {
+            targetHeightFraction = 0.76
+        } else if size.height >= 1000 {
+            targetHeightFraction = 0.72
+        } else {
+            targetHeightFraction = 0.78
+        }
         let baseGridWidth = CGFloat(columnCount) * baseTileWidth + CGFloat(max(columnCount - 1, 0)) * baseColumnSpacing
         let baseGridHeight = CGFloat(targetRows) * (baseIconSize + baseTileLabelHeight) + CGFloat(max(targetRows - 1, 0)) * baseRowSpacing
         let widthScale = (size.width * targetWidthFraction) / baseGridWidth
