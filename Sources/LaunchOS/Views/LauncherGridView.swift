@@ -10,23 +10,30 @@ struct PagedLauncherView: View {
     @State private var dragOffset: CGFloat = 0
 
     var body: some View {
-        let pageIndex = min(max(selectedPage, 0), max(pages.count - 1, 0))
-
         GeometryReader { geometry in
+            let pageWidth = max(geometry.size.width, 1)
+
             ZStack {
-                LaunchItemGrid(
-                    items: pages[pageIndex].items,
-                    geometry: geometry,
-                    launchingAppID: launchingAppID,
-                    launch: launch,
-                    reveal: reveal,
-                    openFolder: openFolder
-                )
-                .offset(x: dragOffset)
-                .animation(.snappy(duration: 0.22), value: selectedPage)
+                HStack(spacing: 0) {
+                    ForEach(Array(pages.enumerated()), id: \.element.id) { _, page in
+                        LaunchItemGrid(
+                            items: page.items,
+                            geometry: geometry,
+                            launchingAppID: launchingAppID,
+                            launch: launch,
+                            reveal: reveal,
+                            openFolder: openFolder
+                        )
+                        .frame(width: pageWidth, height: geometry.size.height)
+                    }
+                }
+                .offset(x: -CGFloat(selectedPage) * pageWidth + dragOffset)
+                .animation(.interactiveSpring(response: 0.34, dampingFraction: 0.88, blendDuration: 0.12), value: selectedPage)
 
                 PageStepButton(systemName: "chevron.left") {
-                    selectedPage = max(selectedPage - 1, 0)
+                    withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.88, blendDuration: 0.12)) {
+                        selectedPage = max(selectedPage - 1, 0)
+                    }
                 }
                 .disabled(selectedPage == 0)
                 .opacity(selectedPage == 0 ? 0 : 1)
@@ -34,7 +41,9 @@ struct PagedLauncherView: View {
                 .padding(.leading, 22)
 
                 PageStepButton(systemName: "chevron.right") {
-                    selectedPage = min(selectedPage + 1, pages.count - 1)
+                    withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.88, blendDuration: 0.12)) {
+                        selectedPage = min(selectedPage + 1, pages.count - 1)
+                    }
                 }
                 .disabled(selectedPage >= pages.count - 1)
                 .opacity(selectedPage >= pages.count - 1 ? 0 : 1)
@@ -43,21 +52,44 @@ struct PagedLauncherView: View {
             }
             .contentShape(Rectangle())
             .gesture(
-                DragGesture(minimumDistance: 35)
+                DragGesture(minimumDistance: 18)
                     .onChanged { value in
-                        dragOffset = value.translation.width * 0.18
+                        dragOffset = resistedTranslation(
+                            value.translation.width,
+                            selectedPage: selectedPage,
+                            pageCount: pages.count
+                        )
                     }
                     .onEnded { value in
-                        if value.translation.width < -90 {
-                            selectedPage = min(selectedPage + 1, pages.count - 1)
-                        } else if value.translation.width > 90 {
-                            selectedPage = max(selectedPage - 1, 0)
+                        let threshold = pageWidth * 0.16
+                        let projectedTranslation = value.predictedEndTranslation.width
+                        var nextPage = selectedPage
+
+                        if projectedTranslation < -threshold {
+                            nextPage = min(selectedPage + 1, pages.count - 1)
+                        } else if projectedTranslation > threshold {
+                            nextPage = max(selectedPage - 1, 0)
                         }
 
-                        dragOffset = 0
+                        withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.88, blendDuration: 0.12)) {
+                            selectedPage = nextPage
+                            dragOffset = 0
+                        }
                     }
             )
         }
+    }
+
+    private func resistedTranslation(_ translation: CGFloat, selectedPage: Int, pageCount: Int) -> CGFloat {
+        if selectedPage == 0 && translation > 0 {
+            return translation * 0.22
+        }
+
+        if selectedPage == pageCount - 1 && translation < 0 {
+            return translation * 0.22
+        }
+
+        return translation
     }
 }
 
