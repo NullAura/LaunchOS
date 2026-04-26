@@ -134,16 +134,21 @@ private struct LaunchItemGrid: View {
 
     var body: some View {
         let metrics = GridMetrics(size: geometry.size, itemCount: items.count)
-        let rows = balancedRows(items, targetRowCount: metrics.targetRowCount)
+        let rows = pageRows(items, columns: metrics.columnCount, rows: metrics.targetRowCount)
 
         VStack(spacing: metrics.rowSpacing) {
-            ForEach(Array(rows.enumerated()), id: \.offset) { _, rowItems in
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                 HStack(spacing: metrics.columnSpacing) {
-                    ForEach(rowItems) { item in
-                        launchItemView(item, metrics: metrics)
+                    ForEach(row.indices, id: \.self) { index in
+                        if let item = row[index] {
+                            launchItemView(item, metrics: metrics)
+                        } else {
+                            Color.clear
+                                .frame(width: metrics.tileWidth, height: metrics.tileHeight)
+                        }
                     }
                 }
-                .frame(width: metrics.gridWidth, alignment: .center)
+                .frame(width: metrics.gridWidth, alignment: .leading)
             }
         }
         .frame(width: metrics.gridWidth, height: metrics.gridHeight, alignment: .center)
@@ -174,25 +179,16 @@ private struct LaunchItemGrid: View {
         }
     }
 
-    private func balancedRows(_ items: [LaunchItem], targetRowCount: Int) -> [[LaunchItem]] {
-        guard !items.isEmpty else {
-            return []
+    private func pageRows(_ items: [LaunchItem], columns: Int, rows: Int) -> [[LaunchItem?]] {
+        let capacity = max(columns * rows, 1)
+        let pageItems = Array(items.prefix(capacity))
+
+        return (0..<rows).map { rowIndex in
+            (0..<columns).map { columnIndex in
+                let itemIndex = rowIndex * columns + columnIndex
+                return itemIndex < pageItems.count ? pageItems[itemIndex] : nil
+            }
         }
-
-        let rowCount = max(1, min(targetRowCount, items.count))
-        let baseCount = items.count / rowCount
-        let extraCount = items.count % rowCount
-        var output: [[LaunchItem]] = []
-        var index = 0
-
-        for rowIndex in 0..<rowCount {
-            let count = baseCount + (rowIndex < extraCount ? 1 : 0)
-            let endIndex = min(index + count, items.count)
-            output.append(Array(items[index..<endIndex]))
-            index = endIndex
-        }
-
-        return output
     }
 }
 
@@ -362,6 +358,7 @@ private struct GridMetrics {
     let iconSize: CGFloat
     let rowSpacing: CGFloat
     let columnSpacing: CGFloat
+    let columnCount: Int
     let horizontalPadding: CGFloat
     let gridWidth: CGFloat
     let gridHeight: CGFloat
@@ -373,12 +370,9 @@ private struct GridMetrics {
         let baseColumnSpacing: CGFloat = 34
         let baseRowSpacing: CGFloat = 31
         let baseTileLabelHeight: CGFloat = 48
-        let nonEmptyItemCount = max(itemCount, 1)
         let widthBasedColumns = max(3, min(7, Int(size.width / 126)))
-        let columnCount = max(1, min(widthBasedColumns, nonEmptyItemCount))
-        let targetRows = size.height >= 700
-            ? 5
-            : min(4, max(1, Int(ceil(Double(nonEmptyItemCount) / Double(columnCount)))))
+        let columnCount = size.width >= 900 ? 7 : widthBasedColumns
+        let targetRows = size.height >= 700 ? 5 : 4
 
         let targetWidthFraction: CGFloat = size.width >= 1000 ? 0.68 : 0.86
         let targetHeightFraction: CGFloat = size.height >= 1000 ? 0.74 : 0.78
@@ -393,6 +387,7 @@ private struct GridMetrics {
         self.tileHeight = iconSize + baseTileLabelHeight
         self.rowSpacing = baseRowSpacing * screenScale * spacingScale
         self.columnSpacing = baseColumnSpacing * screenScale * spacingScale
+        self.columnCount = columnCount
         self.gridWidth = tileWidth * CGFloat(columnCount) + columnSpacing * CGFloat(max(columnCount - 1, 0))
         self.gridHeight = tileHeight * CGFloat(targetRows) + rowSpacing * CGFloat(max(targetRows - 1, 0))
         self.targetRowCount = targetRows
