@@ -8,7 +8,22 @@ final class LaunchSnapshotCache {
     }
 
     func load() -> LaunchSnapshot? {
-        let url = cacheURL()
+        load(from: cacheURL(fileName: "launch-cache.json"))
+    }
+
+    func loadUserLayout() -> LaunchSnapshot? {
+        load(from: cacheURL(fileName: "launch-layout.json"))
+    }
+
+    func saveUserLayout(_ snapshot: LaunchSnapshot) {
+        save(snapshot, to: cacheURL(fileName: "launch-layout.json"))
+    }
+
+    func save(_ snapshot: LaunchSnapshot) {
+        save(snapshot, to: cacheURL(fileName: "launch-cache.json"))
+    }
+
+    private func load(from url: URL) -> LaunchSnapshot? {
         guard let data = try? Data(contentsOf: url),
               let cached = try? JSONDecoder().decode(CachedSnapshot.self, from: data) else {
             return nil
@@ -36,8 +51,7 @@ final class LaunchSnapshotCache {
         )
     }
 
-    func save(_ snapshot: LaunchSnapshot) {
-        let url = cacheURL()
+    private func save(_ snapshot: LaunchSnapshot, to url: URL) {
         let cached = CachedSnapshot(snapshot: snapshot)
 
         do {
@@ -53,13 +67,13 @@ final class LaunchSnapshotCache {
         }
     }
 
-    private func cacheURL() -> URL {
+    private func cacheURL(fileName: String) -> URL {
         let baseURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.temporaryDirectory
 
         return baseURL
             .appendingPathComponent("LaunchOS", isDirectory: true)
-            .appendingPathComponent("launch-cache.json")
+            .appendingPathComponent(fileName)
     }
 }
 

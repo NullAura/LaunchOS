@@ -66,6 +66,12 @@ enum LaunchItem: Identifiable, Hashable, Sendable {
     }
 }
 
+enum LaunchDropPlacement {
+    case before
+    case after
+    case combine
+}
+
 struct LaunchPage: Identifiable, Hashable, Sendable {
     let id: String
     let title: String

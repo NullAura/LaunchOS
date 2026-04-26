@@ -19,8 +19,16 @@ final class LaunchLibrary {
         cache.load()
     }
 
+    func loadUserLayoutSnapshot() -> LaunchSnapshot? {
+        cache.loadUserLayout()
+    }
+
     func saveSnapshotToCache(_ snapshot: LaunchSnapshot) {
         cache.save(snapshot)
+    }
+
+    func saveUserLayoutSnapshot(_ snapshot: LaunchSnapshot) {
+        cache.saveUserLayout(snapshot)
     }
 
     func loadLaunchpadSnapshot() -> LaunchSnapshot? {
@@ -50,19 +58,9 @@ final class LaunchLibrary {
         if let layout = try? importer.importLayoutIfAvailable() {
             let materialized = materialize(layout: layout, installedIndex: installedIndex)
             if !materialized.pages.isEmpty {
-                let extraApps = installedApplications
-                    .filter { !materialized.usedApplicationIDs.contains($0.id) }
-                    .map { LaunchItem.app(LaunchApp(installedApplication: $0)) }
-
-                let pages = materialized.pages + pagedItems(
-                    extraApps,
-                    titlePrefix: "新增应用",
-                    idPrefix: "extras"
-                )
-
                 return LaunchSnapshot(
-                    pages: pages,
-                    totalAppCount: installedApplications.count,
+                    pages: materialized.pages,
+                    totalAppCount: materialized.importedAppCount,
                     importedAppCount: materialized.importedAppCount,
                     launchpadDatabasePath: layout.databasePath,
                     usedLaunchpadLayout: true,
@@ -224,22 +222,16 @@ final class LaunchLibrary {
             ?? installedIndex.application(title: importedApp.title)
             ?? scanner.resolve(bundleIdentifier: importedApp.bundleIdentifier, title: importedApp.title)
 
-        guard let installed else {
-            return nil
+        if let installed {
+            return LaunchApp(installedApplication: installed, preferredTitle: importedApp.title)
         }
 
-        return LaunchApp(installedApplication: installed, preferredTitle: importedApp.title)
+        return launchAppFromBookmark(importedApp)
     }
 
     private func launchApp(importedApp: ImportedLaunchpadApp) -> LaunchApp? {
-        if let url = importedApp.url {
-            return LaunchApp(
-                id: importedApp.bundleIdentifier.lowercased(),
-                title: importedApp.title.nilIfBlank ?? importedApp.bundleIdentifier,
-                bundleIdentifier: importedApp.bundleIdentifier,
-                url: url,
-                source: .workspace
-            )
+        if let app = launchAppFromBookmark(importedApp) {
+            return app
         }
 
         guard let installed = scanner.resolve(
@@ -250,6 +242,20 @@ final class LaunchLibrary {
         }
 
         return LaunchApp(installedApplication: installed, preferredTitle: importedApp.title)
+    }
+
+    private func launchAppFromBookmark(_ importedApp: ImportedLaunchpadApp) -> LaunchApp? {
+        guard let url = importedApp.url else {
+            return nil
+        }
+
+        return LaunchApp(
+            id: importedApp.bundleIdentifier.lowercased(),
+            title: importedApp.title.nilIfBlank ?? importedApp.bundleIdentifier,
+            bundleIdentifier: importedApp.bundleIdentifier,
+            url: url,
+            source: .workspace
+        )
     }
 
     private func pagedItems(_ items: [LaunchItem], titlePrefix: String, idPrefix: String) -> [LaunchPage] {

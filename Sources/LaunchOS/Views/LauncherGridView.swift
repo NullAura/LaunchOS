@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct PagedLauncherView: View {
     let pages: [LaunchPage]
@@ -9,22 +10,29 @@ struct PagedLauncherView: View {
     let launch: (LaunchApp) -> Void
     let reveal: (LaunchApp) -> Void
     let openFolder: (LaunchFolder) -> Void
+    let beginDragging: (LaunchItem, String) -> Void
+    let dropOnPageItem: (String, String, LaunchDropPlacement) -> Void
+    let dropOnPagePosition: (String, Int) -> Void
     @State private var dragOffset: CGFloat = 0
 
     var body: some View {
         GeometryReader { geometry in
             let pageWidth = max(geometry.size.width, 1)
+            let excludedDragRects = currentPageItemRects(in: geometry.size)
 
             ZStack {
                 HStack(spacing: 0) {
                     ForEach(Array(pages.enumerated()), id: \.element.id) { _, page in
                         LaunchItemGrid(
-                            items: page.items,
+                            page: page,
                             geometry: geometry,
                             launchingAppID: launchingAppID,
                             launch: launch,
                             reveal: reveal,
-                            openFolder: openFolder
+                            openFolder: openFolder,
+                            beginDragging: beginDragging,
+                            dropOnPageItem: dropOnPageItem,
+                            dropOnPagePosition: dropOnPagePosition
                         )
                         .frame(width: pageWidth, height: geometry.size.height)
                     }
@@ -57,6 +65,7 @@ struct PagedLauncherView: View {
                     selectedPage: selectedPage,
                     canMovePrevious: selectedPage > 0,
                     canMoveNext: selectedPage < pages.count - 1,
+                    excludedDragRects: excludedDragRects,
                     dragChanged: { translation in
                         guard isPagingEnabled else {
                             return
@@ -115,6 +124,28 @@ struct PagedLauncherView: View {
 
         return translation
     }
+
+    private func currentPageItemRects(in size: CGSize) -> [CGRect] {
+        guard pages.indices.contains(selectedPage) else {
+            return []
+        }
+
+        let page = pages[selectedPage]
+        let metrics = GridMetrics(size: size, itemCount: page.items.count)
+        let originX = (size.width - metrics.gridWidth) / 2
+        let originY = (size.height - metrics.gridHeight) / 2
+
+        return page.items.indices.map { index in
+            let row = index / metrics.columnCount
+            let column = index % metrics.columnCount
+            return CGRect(
+                x: originX + CGFloat(column) * (metrics.tileWidth + metrics.columnSpacing),
+                y: originY + CGFloat(row) * (metrics.tileHeight + metrics.rowSpacing),
+                width: metrics.tileWidth,
+                height: metrics.tileHeight
+            )
+        }
+    }
 }
 
 struct SearchResultsView: View {
@@ -145,6 +176,10 @@ struct FolderOverlayView: View {
     let launchingAppID: String?
     let launch: (LaunchApp) -> Void
     let reveal: (LaunchApp) -> Void
+    let beginDragging: (LaunchApp, String) -> Void
+    let dropOnFolderApp: (String, String, LaunchDropPlacement) -> Void
+    let dropIntoFolder: (String) -> Void
+    let dropOutOfFolder: () -> Void
 
     var body: some View {
         GeometryReader { geometry in
@@ -155,6 +190,10 @@ struct FolderOverlayView: View {
                 Color.black.opacity(0.22)
                     .ignoresSafeArea()
                     .onTapGesture(perform: close)
+                    .onDrop(
+                        of: [.plainText],
+                        delegate: FolderBackdropDropDelegate(drop: dropOutOfFolder)
+                    )
                     .transition(.opacity)
 
                 VStack(spacing: 16) {
@@ -164,13 +203,16 @@ struct FolderOverlayView: View {
                         .padding(.horizontal, 22)
                         .padding(.top, 18)
 
-                    LaunchAppGrid(
+                    FolderAppGrid(
+                        folderID: folder.id,
                         apps: folder.apps,
                         spacingScale: 0.92,
-                        mode: .folder,
                         launchingAppID: launchingAppID,
                         launch: launch,
-                        reveal: reveal
+                        reveal: reveal,
+                        beginDragging: beginDragging,
+                        dropOnFolderApp: dropOnFolderApp,
+                        dropIntoFolder: dropIntoFolder
                     )
                 }
                 .frame(width: width, height: height)
@@ -182,19 +224,22 @@ struct FolderOverlayView: View {
 }
 
 private struct LaunchItemGrid: View {
-    let items: [LaunchItem]
+    let page: LaunchPage
     let geometry: GeometryProxy
     let launchingAppID: String?
     let launch: (LaunchApp) -> Void
     let reveal: (LaunchApp) -> Void
     let openFolder: (LaunchFolder) -> Void
+    let beginDragging: (LaunchItem, String) -> Void
+    let dropOnPageItem: (String, String, LaunchDropPlacement) -> Void
+    let dropOnPagePosition: (String, Int) -> Void
 
     var body: some View {
-        let metrics = GridMetrics(size: geometry.size, itemCount: items.count)
-        let rows = pageRows(items, columns: metrics.columnCount, rows: metrics.targetRowCount)
+        let metrics = GridMetrics(size: geometry.size, itemCount: page.items.count)
+        let rows = pageRows(page.items, columns: metrics.columnCount, rows: metrics.targetRowCount)
 
         VStack(spacing: metrics.rowSpacing) {
-            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+            ForEach(Array(rows.enumerated()), id: \.offset) { rowIndex, row in
                 HStack(spacing: metrics.columnSpacing) {
                     ForEach(row.indices, id: \.self) { index in
                         if let item = row[index] {
@@ -202,6 +247,15 @@ private struct LaunchItemGrid: View {
                         } else {
                             Color.clear
                                 .frame(width: metrics.tileWidth, height: metrics.tileHeight)
+                                .contentShape(Rectangle())
+                                .onDrop(
+                                    of: [.plainText],
+                                    delegate: PagePositionDropDelegate(
+                                        pageID: page.id,
+                                        index: rowIndex * metrics.columnCount + index,
+                                        drop: dropOnPagePosition
+                                    )
+                                )
                         }
                     }
                 }
@@ -210,6 +264,15 @@ private struct LaunchItemGrid: View {
         }
         .frame(width: metrics.gridWidth, height: metrics.gridHeight, alignment: .center)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .onDrop(
+            of: [.plainText],
+            delegate: PagePositionDropDelegate(
+                pageID: page.id,
+                index: page.items.count,
+                drop: dropOnPagePosition
+            )
+        )
     }
 
     @ViewBuilder
@@ -226,7 +289,19 @@ private struct LaunchItemGrid: View {
                 labelFontSize: metrics.labelFontSize,
                 isLaunching: launchingAppID == app.id,
                 launch: launch,
-                reveal: reveal
+                reveal: reveal,
+                beginDrag: {
+                    beginDragging(item, page.id)
+                }
+            )
+            .onDrop(
+                of: [.plainText],
+                delegate: PageItemDropDelegate(
+                    pageID: page.id,
+                    targetItemID: item.id,
+                    tileSize: CGSize(width: metrics.tileWidth, height: metrics.tileHeight),
+                    drop: dropOnPageItem
+                )
             )
         case .folder(let folder):
             FolderTile(
@@ -237,7 +312,19 @@ private struct LaunchItemGrid: View {
                 labelSpacing: metrics.labelSpacing,
                 labelHeight: metrics.labelHeight,
                 labelFontSize: metrics.labelFontSize,
-                open: openFolder
+                open: openFolder,
+                beginDrag: {
+                    beginDragging(item, page.id)
+                }
+            )
+            .onDrop(
+                of: [.plainText],
+                delegate: PageItemDropDelegate(
+                    pageID: page.id,
+                    targetItemID: item.id,
+                    tileSize: CGSize(width: metrics.tileWidth, height: metrics.tileHeight),
+                    drop: dropOnPageItem
+                )
             )
         }
     }
@@ -293,6 +380,170 @@ private struct LaunchAppGrid: View {
     }
 }
 
+private struct FolderAppGrid: View {
+    let folderID: String
+    let apps: [LaunchApp]
+    let spacingScale: CGFloat
+    let launchingAppID: String?
+    let launch: (LaunchApp) -> Void
+    let reveal: (LaunchApp) -> Void
+    let beginDragging: (LaunchApp, String) -> Void
+    let dropOnFolderApp: (String, String, LaunchDropPlacement) -> Void
+    let dropIntoFolder: (String) -> Void
+
+    var body: some View {
+        GeometryReader { geometry in
+            let metrics = GridMetrics(size: geometry.size, itemCount: apps.count, spacingScale: spacingScale, mode: .folder)
+
+            ScrollView {
+                LazyVGrid(columns: metrics.columns, spacing: metrics.rowSpacing) {
+                    ForEach(apps) { app in
+                        AppTile(
+                            app: app,
+                            tileWidth: metrics.tileWidth,
+                            tileHeight: metrics.tileHeight,
+                            iconSize: metrics.iconSize,
+                            labelSpacing: metrics.labelSpacing,
+                            labelHeight: metrics.labelHeight,
+                            labelFontSize: metrics.labelFontSize,
+                            isLaunching: launchingAppID == app.id,
+                            launch: launch,
+                            reveal: reveal,
+                            beginDrag: {
+                                beginDragging(app, folderID)
+                            }
+                        )
+                        .onDrop(
+                            of: [.plainText],
+                            delegate: FolderAppDropDelegate(
+                                folderID: folderID,
+                                targetAppID: app.id,
+                                tileSize: CGSize(width: metrics.tileWidth, height: metrics.tileHeight),
+                                drop: dropOnFolderApp
+                            )
+                        )
+                    }
+                }
+                .padding(.horizontal, metrics.horizontalPadding)
+                .padding(.vertical, 24)
+                .frame(maxWidth: .infinity)
+            }
+            .contentShape(Rectangle())
+            .onDrop(
+                of: [.plainText],
+                delegate: FolderDropDelegate(folderID: folderID, drop: dropIntoFolder)
+            )
+            .scrollIndicators(.hidden)
+        }
+    }
+}
+
+private struct PageItemDropDelegate: DropDelegate {
+    let pageID: String
+    let targetItemID: String
+    let tileSize: CGSize
+    let drop: (String, String, LaunchDropPlacement) -> Void
+
+    func validateDrop(info: DropInfo) -> Bool {
+        true
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        drop(targetItemID, pageID, placement(for: info.location, tileSize: tileSize))
+        return true
+    }
+}
+
+private struct PagePositionDropDelegate: DropDelegate {
+    let pageID: String
+    let index: Int
+    let drop: (String, Int) -> Void
+
+    func validateDrop(info: DropInfo) -> Bool {
+        true
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        drop(pageID, index)
+        return true
+    }
+}
+
+private struct FolderAppDropDelegate: DropDelegate {
+    let folderID: String
+    let targetAppID: String
+    let tileSize: CGSize
+    let drop: (String, String, LaunchDropPlacement) -> Void
+
+    func validateDrop(info: DropInfo) -> Bool {
+        true
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        drop(targetAppID, folderID, placement(for: info.location, tileSize: tileSize))
+        return true
+    }
+}
+
+private struct FolderDropDelegate: DropDelegate {
+    let folderID: String
+    let drop: (String) -> Void
+
+    func validateDrop(info: DropInfo) -> Bool {
+        true
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        drop(folderID)
+        return true
+    }
+}
+
+private struct FolderBackdropDropDelegate: DropDelegate {
+    let drop: () -> Void
+
+    func validateDrop(info: DropInfo) -> Bool {
+        true
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        drop()
+        return true
+    }
+}
+
+private func placement(for location: CGPoint, tileSize: CGSize) -> LaunchDropPlacement {
+    if location.x < tileSize.width * 0.30 {
+        return .before
+    }
+
+    if location.x > tileSize.width * 0.70 {
+        return .after
+    }
+
+    return .combine
+}
+
 private struct AppTile: View {
     let app: LaunchApp
     let tileWidth: CGFloat
@@ -304,6 +555,7 @@ private struct AppTile: View {
     let isLaunching: Bool
     let launch: (LaunchApp) -> Void
     let reveal: (LaunchApp) -> Void
+    var beginDrag: (() -> Void)? = nil
 
     var body: some View {
         Button {
@@ -329,6 +581,10 @@ private struct AppTile: View {
         }
         .buttonStyle(.plain)
         .disabled(isLaunching)
+        .onDrag {
+            beginDrag?()
+            return NSItemProvider(object: app.id as NSString)
+        }
         .animation(.smooth(duration: 0.2), value: isLaunching)
         .contextMenu {
             Button("打开") {
@@ -356,6 +612,7 @@ private struct FolderTile: View {
     let labelHeight: CGFloat
     let labelFontSize: CGFloat
     let open: (LaunchFolder) -> Void
+    var beginDrag: (() -> Void)? = nil
 
     var body: some View {
         Button {
@@ -376,6 +633,10 @@ private struct FolderTile: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onDrag {
+            beginDrag?()
+            return NSItemProvider(object: folder.id as NSString)
+        }
         .help(folder.title)
     }
 }
@@ -525,6 +786,7 @@ private struct PageInputBridge: NSViewRepresentable {
     let selectedPage: Int
     let canMovePrevious: Bool
     let canMoveNext: Bool
+    let excludedDragRects: [CGRect]
     let dragChanged: (CGFloat) -> Void
     let dragEnded: (CGFloat, CGFloat) -> Void
     let movePrevious: () -> Void
@@ -535,7 +797,7 @@ private struct PageInputBridge: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSView {
-        let view = NSView(frame: .zero)
+        let view = PageInputView(frame: .zero)
         context.coordinator.installMonitor(attachedTo: view)
         return view
     }
@@ -545,6 +807,7 @@ private struct PageInputBridge: NSViewRepresentable {
         context.coordinator.pageWidth = pageWidth
         context.coordinator.canMovePrevious = canMovePrevious
         context.coordinator.canMoveNext = canMoveNext
+        context.coordinator.excludedDragRects = excludedDragRects
         context.coordinator.dragChanged = dragChanged
         context.coordinator.dragEnded = dragEnded
         context.coordinator.movePrevious = movePrevious
@@ -561,6 +824,7 @@ private struct PageInputBridge: NSViewRepresentable {
         var pageWidth: CGFloat = 1
         var canMovePrevious = false
         var canMoveNext = false
+        var excludedDragRects: [CGRect] = []
         var dragChanged: (CGFloat) -> Void = { _ in }
         var dragEnded: (CGFloat, CGFloat) -> Void = { _, _ in }
         var movePrevious: () -> Void = {}
@@ -572,6 +836,7 @@ private struct PageInputBridge: NSViewRepresentable {
         private var accumulatedScrollDeltaX: CGFloat = 0
         private var lastScrollMoveDate = Date.distantPast
         private var isTrackingDrag = false
+        private var isIgnoringDrag = false
         private var didBeginPagingDrag = false
         private var accumulatedDragX: CGFloat = 0
         private var accumulatedDragY: CGFloat = 0
@@ -683,7 +948,15 @@ private struct PageInputBridge: NSViewRepresentable {
                 return event
             }
 
+            if isEventInsideExcludedDragRect(event) {
+                isIgnoringDrag = true
+                isTrackingDrag = false
+                didBeginPagingDrag = false
+                return event
+            }
+
             isTrackingDrag = true
+            isIgnoringDrag = false
             didBeginPagingDrag = false
             accumulatedDragX = 0
             accumulatedDragY = 0
@@ -692,6 +965,10 @@ private struct PageInputBridge: NSViewRepresentable {
         }
 
         private func handleMouseDragged(_ event: NSEvent) -> NSEvent? {
+            if isIgnoringDrag {
+                return event
+            }
+
             if !isTrackingDrag {
                 guard isEventInsideBridge(event) else {
                     return event
@@ -714,6 +991,11 @@ private struct PageInputBridge: NSViewRepresentable {
         }
 
         private func handleMouseUp(_ event: NSEvent) -> NSEvent? {
+            if isIgnoringDrag {
+                resetDragState()
+                return event
+            }
+
             guard isTrackingDrag else {
                 return event
             }
@@ -742,6 +1024,17 @@ private struct PageInputBridge: NSViewRepresentable {
             return view.bounds.contains(point)
         }
 
+        private func isEventInsideExcludedDragRect(_ event: NSEvent) -> Bool {
+            guard let view,
+                  let window = view.window,
+                  event.window === window else {
+                return false
+            }
+
+            let point = view.convert(event.locationInWindow, from: nil)
+            return excludedDragRects.contains { $0.contains(point) }
+        }
+
         private func resetScrollState() {
             accumulatedScrollDeltaX = 0
         }
@@ -756,10 +1049,17 @@ private struct PageInputBridge: NSViewRepresentable {
 
         private func resetDragState() {
             isTrackingDrag = false
+            isIgnoringDrag = false
             didBeginPagingDrag = false
             accumulatedDragX = 0
             accumulatedDragY = 0
             dragStartDate = .distantPast
         }
+    }
+}
+
+private final class PageInputView: NSView {
+    override var isFlipped: Bool {
+        true
     }
 }

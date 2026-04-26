@@ -135,9 +135,14 @@ final class LaunchpadLayoutImporter {
         try rows(
             database: database,
             sql: """
-                SELECT i.rowid, i.type, COALESCE(a.title, ''), COALESCE(a.bundleid, ''), COALESCE(g.title, ''), a.bookmark
+                SELECT i.rowid, i.type,
+                       COALESCE(a.title, d.title, ''),
+                       COALESCE(a.bundleid, d.bundleid, ''),
+                       COALESCE(g.title, ''),
+                       a.bookmark
                 FROM items i
                 LEFT JOIN apps a ON a.item_id = i.rowid
+                LEFT JOIN downloading_apps d ON d.item_id = i.rowid
                 LEFT JOIN groups g ON g.item_id = i.rowid
                 WHERE i.parent_id = ? AND i.type IN (2, 4, 5)
                 ORDER BY i.ordering ASC;

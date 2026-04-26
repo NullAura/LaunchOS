@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct ContentView: View {
@@ -17,8 +18,7 @@ struct ContentView: View {
 
                 Group {
                     if store.isLoading && store.pages.isEmpty {
-                        ProgressView("正在扫描")
-                            .controlSize(.large)
+                        Color.clear
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else if !store.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         SearchResultsView(store: store)
@@ -32,7 +32,10 @@ struct ContentView: View {
                             launchingAppID: store.launchingAppID,
                             launch: store.launch,
                             reveal: store.revealInFinder,
-                            openFolder: store.openFolder
+                            openFolder: store.openFolder,
+                            beginDragging: store.beginDragging,
+                            dropOnPageItem: store.dropDraggedItem,
+                            dropOnPagePosition: store.dropDraggedItem
                         )
                     }
                 }
@@ -50,7 +53,17 @@ struct ContentView: View {
                     close: store.closeFolder,
                     launchingAppID: store.launchingAppID,
                     launch: store.launch,
-                    reveal: store.revealInFinder
+                    reveal: store.revealInFinder,
+                    beginDragging: store.beginDragging,
+                    dropOnFolderApp: store.dropDraggedFolderApp,
+                    dropIntoFolder: store.dropDraggedItemIntoFolder,
+                    dropOutOfFolder: {
+                        guard store.pages.indices.contains(selectedPage) else {
+                            return
+                        }
+
+                        store.dropDraggedItemOutOfFolder(toPageID: store.pages[selectedPage].id)
+                    }
                 )
                 .transition(
                     .asymmetric(
@@ -66,7 +79,6 @@ struct ContentView: View {
         .scaleEffect(store.isClosing ? 0.985 : 1)
         .animation(.easeInOut(duration: 0.22), value: store.isClosing)
         .animation(.smooth(duration: 0.28), value: store.activeFolder?.id)
-        .focusable()
         .onExitCommand(perform: store.handleExitCommand)
         .onMoveCommand(perform: moveSelection)
         .task {
@@ -132,6 +144,7 @@ private struct LauncherBackdrop: View {
 private struct HeaderView: View {
     @ObservedObject var store: LauncherStore
     var searchFocused: FocusState<Bool>.Binding
+    @State private var isSearchHovered = false
 
     var body: some View {
         HStack {
@@ -139,19 +152,112 @@ private struct HeaderView: View {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
 
-                TextField("搜索", text: $store.searchText)
-                    .textFieldStyle(.plain)
-                    .focused(searchFocused)
+                SearchTextField(
+                    text: $store.searchText,
+                    placeholder: "搜索",
+                    isFocused: searchFocused
+                )
+                    .frame(height: 16)
+                    .frame(maxWidth: .infinity)
             }
             .padding(.horizontal, 11)
             .padding(.vertical, 8)
             .frame(width: 280)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .scaleEffect(isSearchHovered ? 1.055 : 1)
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .onHover { hovering in
+                isSearchHovered = hovering
+            }
+            .onTapGesture {
+                searchFocused.wrappedValue = false
+                DispatchQueue.main.async {
+                    searchFocused.wrappedValue = true
+                }
+            }
+            .animation(.interactiveSpring(response: 0.24, dampingFraction: 0.78, blendDuration: 0.08), value: isSearchHovered)
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 34)
         .padding(.top, 28)
         .padding(.bottom, 16)
+    }
+}
+
+private struct SearchTextField: NSViewRepresentable {
+    @Binding var text: String
+    let placeholder: String
+    var isFocused: FocusState<Bool>.Binding
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    func makeNSView(context: Context) -> NSTextField {
+        let textField = ClickFocusableTextField()
+        textField.delegate = context.coordinator
+        textField.placeholderString = placeholder
+        textField.stringValue = text
+        textField.isBordered = false
+        textField.isBezeled = false
+        textField.drawsBackground = false
+        textField.backgroundColor = .clear
+        textField.focusRingType = .none
+        textField.font = .systemFont(ofSize: 13)
+        textField.lineBreakMode = .byTruncatingTail
+        textField.usesSingleLineMode = true
+        textField.cell?.sendsActionOnEndEditing = false
+        textField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return textField
+    }
+
+    func updateNSView(_ textField: NSTextField, context: Context) {
+        context.coordinator.parent = self
+
+        if textField.stringValue != text {
+            textField.stringValue = text
+        }
+
+        guard isFocused.wrappedValue,
+              let window = textField.window,
+              window.firstResponder !== textField.currentEditor() else {
+            return
+        }
+
+        DispatchQueue.main.async {
+            window.makeFirstResponder(textField)
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: SearchTextField
+
+        init(_ parent: SearchTextField) {
+            self.parent = parent
+        }
+
+        func controlTextDidBeginEditing(_ notification: Notification) {
+            parent.isFocused.wrappedValue = true
+        }
+
+        func controlTextDidEndEditing(_ notification: Notification) {
+            parent.isFocused.wrappedValue = false
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let textField = notification.object as? NSTextField else {
+                return
+            }
+
+            parent.text = textField.stringValue
+        }
+    }
+}
+
+private final class ClickFocusableTextField: NSTextField {
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
     }
 }
 
