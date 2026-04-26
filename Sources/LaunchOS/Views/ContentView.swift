@@ -264,20 +264,26 @@ private final class ClickFocusableTextField: NSTextField {
 private struct PageFooterView: View {
     let pages: [LaunchPage]
     @Binding var selectedPage: Int
+    @State private var hoveredPage: Int?
 
     var body: some View {
         VStack(spacing: 10) {
             if pages.count > 1 {
                 HStack(spacing: 9) {
                     ForEach(pages.indices, id: \.self) { index in
-                        Button {
+                        PageIndicatorDot(
+                            isSelected: selectedPage == index,
+                            isHovered: hoveredPage == index
+                        ) {
                             selectedPage = index
-                        } label: {
-                            Circle()
-                                .fill(.primary.opacity(selectedPage == index ? 0.86 : 0.28))
-                                .frame(width: 7, height: 7)
                         }
-                        .buttonStyle(.plain)
+                        .onHover { hovering in
+                            if hovering {
+                                hoveredPage = index
+                            } else if hoveredPage == index {
+                                hoveredPage = nil
+                            }
+                        }
                         .help(pages[index].title)
                     }
                 }
@@ -285,6 +291,51 @@ private struct PageFooterView: View {
         }
         .padding(.horizontal, 24)
         .padding(.bottom, 24)
+    }
+}
+
+private struct PageIndicatorDot: View {
+    let isSelected: Bool
+    let isHovered: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Circle()
+                .fill(.primary.opacity(opacity))
+                .frame(width: baseSize, height: baseSize)
+                .scaleEffect(scale)
+                .shadow(
+                    color: .primary.opacity(isHovered ? 0.2 : 0),
+                    radius: isHovered ? 4 : 0,
+                    y: 1
+                )
+                .frame(width: 20, height: 20)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .animation(.interactiveSpring(response: 0.22, dampingFraction: 0.72, blendDuration: 0.08), value: isHovered)
+        .animation(.smooth(duration: 0.18), value: isSelected)
+    }
+
+    private var opacity: Double {
+        if isSelected {
+            return isHovered ? 0.95 : 0.86
+        }
+
+        return isHovered ? 0.56 : 0.28
+    }
+
+    private var baseSize: CGFloat {
+        isSelected ? 7.5 : 7
+    }
+
+    private var scale: CGFloat {
+        if isHovered {
+            return isSelected ? 1.45 : 1.6
+        }
+
+        return isSelected ? 1.08 : 1
     }
 }
 
