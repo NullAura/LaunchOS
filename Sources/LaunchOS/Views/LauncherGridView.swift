@@ -164,6 +164,9 @@ private struct LaunchItemGrid: View {
                 tileWidth: metrics.tileWidth,
                 tileHeight: metrics.tileHeight,
                 iconSize: metrics.iconSize,
+                labelSpacing: metrics.labelSpacing,
+                labelHeight: metrics.labelHeight,
+                labelFontSize: metrics.labelFontSize,
                 isLaunching: launchingAppID == app.id,
                 launch: launch,
                 reveal: reveal
@@ -174,6 +177,9 @@ private struct LaunchItemGrid: View {
                 tileWidth: metrics.tileWidth,
                 tileHeight: metrics.tileHeight,
                 iconSize: metrics.iconSize,
+                labelSpacing: metrics.labelSpacing,
+                labelHeight: metrics.labelHeight,
+                labelFontSize: metrics.labelFontSize,
                 open: openFolder
             )
         }
@@ -211,6 +217,9 @@ private struct LaunchAppGrid: View {
                             tileWidth: metrics.tileWidth,
                             tileHeight: metrics.tileHeight,
                             iconSize: metrics.iconSize,
+                            labelSpacing: metrics.labelSpacing,
+                            labelHeight: metrics.labelHeight,
+                            labelFontSize: metrics.labelFontSize,
                             isLaunching: launchingAppID == app.id,
                             launch: launch,
                             reveal: reveal
@@ -231,6 +240,9 @@ private struct AppTile: View {
     let tileWidth: CGFloat
     let tileHeight: CGFloat
     let iconSize: CGFloat
+    let labelSpacing: CGFloat
+    let labelHeight: CGFloat
+    let labelFontSize: CGFloat
     let isLaunching: Bool
     let launch: (LaunchApp) -> Void
     let reveal: (LaunchApp) -> Void
@@ -239,18 +251,18 @@ private struct AppTile: View {
         Button {
             launch(app)
         } label: {
-            VStack(spacing: 8) {
+            VStack(spacing: labelSpacing) {
                 Image(nsImage: IconProvider.shared.icon(for: app))
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(width: iconSize, height: iconSize)
 
                 Text(app.title)
-                    .font(.caption)
+                    .font(.system(size: labelFontSize))
                     .foregroundStyle(.primary)
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
-                    .frame(width: tileWidth, height: 34, alignment: .top)
+                    .frame(width: tileWidth, height: labelHeight, alignment: .top)
             }
             .frame(width: tileWidth, height: tileHeight)
             .scaleEffect(isLaunching ? 1.18 : 1)
@@ -282,22 +294,25 @@ private struct FolderTile: View {
     let tileWidth: CGFloat
     let tileHeight: CGFloat
     let iconSize: CGFloat
+    let labelSpacing: CGFloat
+    let labelHeight: CGFloat
+    let labelFontSize: CGFloat
     let open: (LaunchFolder) -> Void
 
     var body: some View {
         Button {
             open(folder)
         } label: {
-            VStack(spacing: 8) {
+            VStack(spacing: labelSpacing) {
                 FolderPreview(apps: Array(folder.apps.prefix(9)), iconSize: iconSize)
                     .frame(width: iconSize, height: iconSize)
 
                 Text(folder.title)
-                    .font(.caption)
+                    .font(.system(size: labelFontSize))
                     .foregroundStyle(.primary)
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
-                    .frame(width: tileWidth, height: 34, alignment: .top)
+                    .frame(width: tileWidth, height: labelHeight, alignment: .top)
             }
             .frame(width: tileWidth, height: tileHeight)
             .contentShape(Rectangle())
@@ -313,8 +328,9 @@ private struct FolderPreview: View {
 
     var body: some View {
         let cornerRadius = iconSize * 0.24
-        let miniIconSize = max(15, (iconSize - 24) / 3)
-        let spacing = max(3, iconSize * 0.045)
+        let spacing = iconSize * 0.05
+        let padding = iconSize * 0.13
+        let miniIconSize = (iconSize - padding * 2 - spacing * 2) / 3
 
         ZStack {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -331,7 +347,7 @@ private struct FolderPreview: View {
                         .frame(width: miniIconSize, height: miniIconSize)
                 }
             }
-            .padding(iconSize * 0.12)
+            .padding(padding)
         }
     }
 }
@@ -356,6 +372,9 @@ private struct GridMetrics {
     let tileWidth: CGFloat
     let tileHeight: CGFloat
     let iconSize: CGFloat
+    let labelSpacing: CGFloat
+    let labelHeight: CGFloat
+    let labelFontSize: CGFloat
     let rowSpacing: CGFloat
     let columnSpacing: CGFloat
     let columnCount: Int
@@ -365,11 +384,6 @@ private struct GridMetrics {
     let targetRowCount: Int
 
     init(size: CGSize, itemCount: Int, spacingScale: CGFloat = 1) {
-        let baseTileWidth: CGFloat = 112
-        let baseIconSize: CGFloat = 76
-        let baseColumnSpacing: CGFloat = 58
-        let baseRowSpacing: CGFloat = 46
-        let baseTileLabelHeight: CGFloat = 48
         let widthBasedColumns = max(3, min(7, Int(size.width / 126)))
         let columnCount = size.width >= 900 ? 7 : widthBasedColumns
         let targetRows = size.height >= 700 ? 5 : 4
@@ -393,17 +407,32 @@ private struct GridMetrics {
         } else {
             targetHeightFraction = 0.78
         }
-        let baseGridWidth = CGFloat(columnCount) * baseTileWidth + CGFloat(max(columnCount - 1, 0)) * baseColumnSpacing
-        let baseGridHeight = CGFloat(targetRows) * (baseIconSize + baseTileLabelHeight) + CGFloat(max(targetRows - 1, 0)) * baseRowSpacing
-        let widthScale = (size.width * targetWidthFraction) / baseGridWidth
-        let heightScale = (size.height * targetHeightFraction) / baseGridHeight
-        let screenScale = min(max(min(widthScale, heightScale), 0.62), 2.5)
 
-        self.tileWidth = baseTileWidth * screenScale
-        self.iconSize = baseIconSize * screenScale
-        self.tileHeight = iconSize + baseTileLabelHeight
-        self.rowSpacing = baseRowSpacing * screenScale * spacingScale
-        self.columnSpacing = baseColumnSpacing * screenScale * spacingScale
+        let tileWidthRatio: CGFloat = 1.48
+        let labelSpacingRatio: CGFloat = 0.10
+        let labelHeightRatio: CGFloat = 0.42
+        let columnSpacingRatio: CGFloat = 0.74
+        let rowSpacingRatio: CGFloat = 0.58
+        let tileHeightRatio = 1 + labelSpacingRatio + labelHeightRatio
+        let widthCoefficient = CGFloat(columnCount) * tileWidthRatio
+            + CGFloat(max(columnCount - 1, 0)) * columnSpacingRatio
+        let heightCoefficient = CGFloat(targetRows) * tileHeightRatio
+            + CGFloat(max(targetRows - 1, 0)) * rowSpacingRatio
+        let iconSizeFromWidth = size.width * targetWidthFraction / widthCoefficient
+        let iconSizeFromHeight = size.height * targetHeightFraction / heightCoefficient
+        let shortSide = min(size.width, size.height)
+        let proportionalMinimum = shortSide * 0.052
+        let proportionalMaximum = shortSide * 0.105
+        let resolvedIconSize = min(max(min(iconSizeFromWidth, iconSizeFromHeight), proportionalMinimum), proportionalMaximum)
+
+        self.iconSize = resolvedIconSize
+        self.tileWidth = resolvedIconSize * tileWidthRatio
+        self.labelSpacing = resolvedIconSize * labelSpacingRatio
+        self.labelHeight = resolvedIconSize * labelHeightRatio
+        self.labelFontSize = resolvedIconSize * 0.115
+        self.tileHeight = resolvedIconSize * tileHeightRatio
+        self.rowSpacing = resolvedIconSize * rowSpacingRatio * spacingScale
+        self.columnSpacing = resolvedIconSize * columnSpacingRatio * spacingScale
         self.columnCount = columnCount
         self.gridWidth = tileWidth * CGFloat(columnCount) + columnSpacing * CGFloat(max(columnCount - 1, 0))
         self.gridHeight = tileHeight * CGFloat(targetRows) + rowSpacing * CGFloat(max(targetRows - 1, 0))
