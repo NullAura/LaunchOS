@@ -92,8 +92,8 @@ struct FolderOverlayView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let width = min(680, max(460, geometry.size.width - 100))
-            let height = min(520, max(360, geometry.size.height - 140))
+            let width = min(720, max(500, geometry.size.width * 0.36))
+            let height = min(560, max(390, geometry.size.height * 0.44))
 
             ZStack {
                 Color.black.opacity(0.22)
@@ -106,7 +106,7 @@ struct FolderOverlayView: View {
                         .font(.title2.weight(.semibold))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 22)
-                    .padding(.top, 18)
+                        .padding(.top, 18)
 
                     LaunchAppGrid(
                         apps: folder.apps,
@@ -117,8 +117,8 @@ struct FolderOverlayView: View {
                     )
                 }
                 .frame(width: width, height: height)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .shadow(radius: 28)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .shadow(color: .black.opacity(0.28), radius: 30, y: 16)
             }
         }
     }
@@ -134,38 +134,65 @@ private struct LaunchItemGrid: View {
 
     var body: some View {
         let metrics = GridMetrics(size: geometry.size, itemCount: items.count)
+        let rows = balancedRows(items, targetRowCount: metrics.targetRowCount)
 
-        ScrollView {
-            LazyVGrid(columns: metrics.columns, spacing: metrics.rowSpacing) {
-                ForEach(items) { item in
-                    switch item {
-                    case .app(let app):
-                        AppTile(
-                            app: app,
-                            tileWidth: metrics.tileWidth,
-                            tileHeight: metrics.tileHeight,
-                            iconSize: metrics.iconSize,
-                            isLaunching: launchingAppID == app.id,
-                            launch: launch,
-                            reveal: reveal
-                        )
-                    case .folder(let folder):
-                        FolderTile(
-                            folder: folder,
-                            tileWidth: metrics.tileWidth,
-                            tileHeight: metrics.tileHeight,
-                            iconSize: metrics.iconSize,
-                            open: openFolder
-                        )
+        VStack(spacing: metrics.rowSpacing) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, rowItems in
+                HStack(spacing: metrics.columnSpacing) {
+                    ForEach(rowItems) { item in
+                        launchItemView(item, metrics: metrics)
                     }
                 }
+                .frame(width: metrics.gridWidth, alignment: .center)
             }
-            .padding(.horizontal, metrics.horizontalPadding)
-            .padding(.vertical, 26)
-            .frame(maxWidth: .infinity)
-            .frame(minHeight: geometry.size.height)
         }
-        .scrollIndicators(.hidden)
+        .frame(width: metrics.gridWidth, height: metrics.gridHeight, alignment: .center)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private func launchItemView(_ item: LaunchItem, metrics: GridMetrics) -> some View {
+        switch item {
+        case .app(let app):
+            AppTile(
+                app: app,
+                tileWidth: metrics.tileWidth,
+                tileHeight: metrics.tileHeight,
+                iconSize: metrics.iconSize,
+                isLaunching: launchingAppID == app.id,
+                launch: launch,
+                reveal: reveal
+            )
+        case .folder(let folder):
+            FolderTile(
+                folder: folder,
+                tileWidth: metrics.tileWidth,
+                tileHeight: metrics.tileHeight,
+                iconSize: metrics.iconSize,
+                open: openFolder
+            )
+        }
+    }
+
+    private func balancedRows(_ items: [LaunchItem], targetRowCount: Int) -> [[LaunchItem]] {
+        guard !items.isEmpty else {
+            return []
+        }
+
+        let rowCount = max(1, min(targetRowCount, items.count))
+        let baseCount = items.count / rowCount
+        let extraCount = items.count % rowCount
+        var output: [[LaunchItem]] = []
+        var index = 0
+
+        for rowIndex in 0..<rowCount {
+            let count = baseCount + (rowIndex < extraCount ? 1 : 0)
+            let endIndex = min(index + count, items.count)
+            output.append(Array(items[index..<endIndex]))
+            index = endIndex
+        }
+
+        return output
     }
 }
 
@@ -334,7 +361,11 @@ private struct GridMetrics {
     let tileHeight: CGFloat
     let iconSize: CGFloat
     let rowSpacing: CGFloat
+    let columnSpacing: CGFloat
     let horizontalPadding: CGFloat
+    let gridWidth: CGFloat
+    let gridHeight: CGFloat
+    let targetRowCount: Int
 
     init(size: CGSize, itemCount: Int, spacingScale: CGFloat = 1) {
         let baseTileWidth: CGFloat = 112
@@ -342,41 +373,30 @@ private struct GridMetrics {
         let baseColumnSpacing: CGFloat = 34
         let baseRowSpacing: CGFloat = 31
         let baseTileLabelHeight: CGFloat = 48
+        let nonEmptyItemCount = max(itemCount, 1)
+        let widthBasedColumns = max(3, min(7, Int(size.width / 126)))
+        let columnCount = max(1, min(widthBasedColumns, nonEmptyItemCount))
+        let targetRows = size.height >= 700
+            ? 5
+            : min(4, max(1, Int(ceil(Double(nonEmptyItemCount) / Double(columnCount)))))
 
-        let maxColumns: Int
-        if size.width >= 3300 {
-            maxColumns = 10
-        } else if size.width >= 2500 {
-            maxColumns = 9
-        } else {
-            maxColumns = 7
-        }
-
-        let columnCount = max(3, min(maxColumns, max(itemCount, 1)))
-        let rowCount = max(1, ceil(CGFloat(max(itemCount, 1)) / CGFloat(columnCount)))
-
-        let targetWidthFraction: CGFloat
-        if size.width >= 3300 {
-            targetWidthFraction = 0.74
-        } else if size.width >= 2500 {
-            targetWidthFraction = 0.70
-        } else {
-            targetWidthFraction = 0.69
-        }
-
-        let targetHeightFraction: CGFloat = size.height >= 1400 ? 0.72 : 0.68
+        let targetWidthFraction: CGFloat = size.width >= 1000 ? 0.68 : 0.86
+        let targetHeightFraction: CGFloat = size.height >= 1000 ? 0.74 : 0.78
         let baseGridWidth = CGFloat(columnCount) * baseTileWidth + CGFloat(max(columnCount - 1, 0)) * baseColumnSpacing
-        let baseGridHeight = rowCount * (baseIconSize + baseTileLabelHeight) + CGFloat(max(Int(rowCount) - 1, 0)) * baseRowSpacing
+        let baseGridHeight = CGFloat(targetRows) * (baseIconSize + baseTileLabelHeight) + CGFloat(max(targetRows - 1, 0)) * baseRowSpacing
         let widthScale = (size.width * targetWidthFraction) / baseGridWidth
         let heightScale = (size.height * targetHeightFraction) / baseGridHeight
-        let screenScale = min(max(min(widthScale, heightScale), 0.9), 2.35)
+        let screenScale = min(max(min(widthScale, heightScale), 0.62), 2.5)
 
-        let columnSpacing = baseColumnSpacing * screenScale * spacingScale
         self.tileWidth = baseTileWidth * screenScale
         self.iconSize = baseIconSize * screenScale
         self.tileHeight = iconSize + baseTileLabelHeight
         self.rowSpacing = baseRowSpacing * screenScale * spacingScale
-        self.horizontalPadding = max(34, (size.width - (tileWidth * CGFloat(columnCount)) - (columnSpacing * CGFloat(columnCount - 1))) / 2)
+        self.columnSpacing = baseColumnSpacing * screenScale * spacingScale
+        self.gridWidth = tileWidth * CGFloat(columnCount) + columnSpacing * CGFloat(max(columnCount - 1, 0))
+        self.gridHeight = tileHeight * CGFloat(targetRows) + rowSpacing * CGFloat(max(targetRows - 1, 0))
+        self.targetRowCount = targetRows
+        self.horizontalPadding = max(24, (size.width - gridWidth) / 2)
         self.columns = Array(repeating: GridItem(.fixed(tileWidth), spacing: columnSpacing), count: columnCount)
     }
 }
