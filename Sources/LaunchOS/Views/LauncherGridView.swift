@@ -858,7 +858,9 @@ private struct PageInputBridge: NSViewRepresentable {
         private var monitor: Any?
         private var selectedPage = 0
         private var accumulatedScrollDeltaX: CGFloat = 0
+        private var lastScrollEventDate = Date.distantPast
         private var lastScrollMoveDate = Date.distantPast
+        private var didHandleCurrentScrollGesture = false
         private var trackedItemDragTarget: PageItemDragTarget?
         private var isTrackingDrag = false
         private var didBeginItemDrag = false
@@ -896,7 +898,6 @@ private struct PageInputBridge: NSViewRepresentable {
             }
 
             selectedPage = page
-            resetScrollState()
             resetDragState()
         }
 
@@ -926,45 +927,86 @@ private struct PageInputBridge: NSViewRepresentable {
                 return event
             }
 
+            let now = Date()
+            let hasPhase = event.phase != [] || event.momentumPhase != []
+            if !hasPhase, now.timeIntervalSince(lastScrollEventDate) > 0.42 {
+                resetScrollState()
+            }
+
+            lastScrollEventDate = now
+
             let shouldResetAtEnd = event.phase == .ended
                 || event.phase == .cancelled
                 || event.momentumPhase == .ended
                 || event.momentumPhase == .cancelled
-            defer {
-                if shouldResetAtEnd {
-                    resetScrollState()
-                }
-            }
 
-            if event.phase == .began || event.momentumPhase == .began {
+            if event.phase == .began || event.phase == .mayBegin {
                 resetScrollState()
+                lastScrollEventDate = now
             }
 
             let horizontal = event.scrollingDeltaX
             let vertical = event.scrollingDeltaY
             guard abs(horizontal) > max(1.2, abs(vertical) * 1.2) else {
+                if shouldResetAtEnd, !didHandleCurrentScrollGesture {
+                    accumulatedScrollDeltaX = 0
+                }
+
                 return event
             }
 
             accumulatedScrollDeltaX += horizontal
 
-            let threshold: CGFloat = event.hasPreciseScrollingDeltas ? min(18, max(8, pageWidth * 0.004)) : 2
-            let now = Date()
-            guard abs(accumulatedScrollDeltaX) >= threshold,
-                  now.timeIntervalSince(lastScrollMoveDate) > 0.22 else {
+            if !hasPhase {
+                _ = performScrollPageMoveIfNeeded(threshold: scrollThreshold(for: event), cooldown: 0.65)
                 return nil
             }
 
-            if accumulatedScrollDeltaX > 0, canMoveNext {
-                moveNext()
-                lastScrollMoveDate = now
-            } else if accumulatedScrollDeltaX < 0, canMovePrevious {
-                movePrevious()
-                lastScrollMoveDate = now
+            if shouldResetAtEnd {
+                _ = performScrollPageMoveIfNeeded(threshold: scrollThreshold(for: event), cooldown: 0)
+                if !didHandleCurrentScrollGesture {
+                    accumulatedScrollDeltaX = 0
+                }
             }
 
-            accumulatedScrollDeltaX = 0
             return nil
+        }
+
+        private func scrollThreshold(for event: NSEvent) -> CGFloat {
+            if event.hasPreciseScrollingDeltas {
+                return min(max(pageWidth * 0.045, 70), 140)
+            }
+
+            return min(max(pageWidth * 0.012, 8), 28)
+        }
+
+        private func performScrollPageMoveIfNeeded(threshold: CGFloat, cooldown: TimeInterval) -> Bool {
+            guard !didHandleCurrentScrollGesture,
+                  abs(accumulatedScrollDeltaX) >= threshold else {
+                return false
+            }
+
+            let now = Date()
+            guard cooldown <= 0 || now.timeIntervalSince(lastScrollMoveDate) > cooldown else {
+                return false
+            }
+
+            if accumulatedScrollDeltaX > 0 {
+                if canMovePrevious {
+                    movePrevious()
+                    lastScrollMoveDate = now
+                    didHandleCurrentScrollGesture = true
+                    return true
+                }
+            } else if canMoveNext {
+                moveNext()
+                lastScrollMoveDate = now
+                didHandleCurrentScrollGesture = true
+                return true
+            }
+
+            didHandleCurrentScrollGesture = true
+            return false
         }
 
         private func handleMouseDown(_ event: NSEvent) -> NSEvent? {
@@ -1109,6 +1151,7 @@ private struct PageInputBridge: NSViewRepresentable {
 
         private func resetScrollState() {
             accumulatedScrollDeltaX = 0
+            didHandleCurrentScrollGesture = false
         }
 
         private func cancelDrag() {
